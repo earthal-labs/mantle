@@ -34,15 +34,17 @@ where
     S: Clone + Send + Sync + 'static,
     StacState: FromRef<S>,
 {
+    // Landing is registered on the parent router at `/stac` and `/stac/` —
+    // Axum's nest("/stac") + route("/") is easy to miss depending on slash.
     Router::new()
-        .route("/", get(landing))
         .route("/collections", get(list_collections))
         .route("/collections/{id}", get(get_collection))
         .route("/collections/{id}/items", get(list_collection_items))
         .route("/search", get(search_get).post(search_post))
 }
 
-async fn landing() -> Json<serde_json::Value> {
+/// STAC landing catalog (`GET /stac`, `GET /stac/`).
+pub async fn landing() -> Json<serde_json::Value> {
     Json(serde_json::to_value(landing_catalog()).expect("catalog json"))
 }
 

@@ -26,7 +26,7 @@ use mantle_config::MantleConfig;
 use mantle_ingestion::{IngestionService, MantleIngestionService, StubIngestionService};
 use mantle_ogc::{router as ogc_router, VrpmSidecarUrl};
 use mantle_raster::{OxigdalRasterEngine, RasterEngine, TileFormat};
-use mantle_stac::router as stac_router;
+use mantle_stac::{landing as stac_landing, router as stac_router};
 use serde::Deserialize;
 use serde::Serialize;
 use std::net::SocketAddr;
@@ -199,6 +199,10 @@ pub async fn build_router(config: Arc<MantleConfig>) -> anyhow::Result<Router> {
         .route("/health", get(health))
         .route("/status/{job_id}", get(get_job_status))
         .route("/tiles/{z}/{x}/{y}", get(get_tile))
+        // Register landing on the parent — nest("/stac")+route("/") does not
+        // reliably match both `/stac` and `/stac/` in Axum 0.8.
+        .route("/stac", get(stac_landing))
+        .route("/stac/", get(stac_landing))
         .nest("/services", service_routes)
         .nest("/plugins", plugin_routes)
         .nest("/stac", stac_routes)

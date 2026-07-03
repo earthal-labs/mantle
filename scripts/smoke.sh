@@ -7,17 +7,30 @@ ADMIN_TOKEN="${MANTLE_ADMIN_TOKEN:-dev-admin-token}"
 
 echo "== Mantle smoke: ${API_URL} =="
 
-health="$(curl -sf "${API_URL}/health")"
-echo "health: ${health}"
+curl_ok() {
+  local path="$1"
+  local label="$2"
+  local body code
+  body="$(mktemp)"
+  code="$(curl -sS -o "$body" -w "%{http_code}" "${API_URL}${path}" || true)"
+  if [[ "$code" != "200" ]]; then
+    echo "${label}: HTTP ${code}" >&2
+    head -c 500 "$body" >&2 || true
+    echo >&2
+    rm -f "$body"
+    return 1
+  fi
+  echo "${label}: ok ($(head -c 80 "$body")...)"
+  rm -f "$body"
+}
 
-stac="$(curl -sf "${API_URL}/stac/")"
-echo "stac landing: ok ($(echo "$stac" | head -c 80)...)"
-
-processes="$(curl -sf "${API_URL}/ogc/processes")"
-echo "ogc processes: ok"
+curl_ok "/health" "health"
+curl_ok "/stac" "stac landing"
+curl_ok "/stac/collections" "stac collections"
+curl_ok "/ogc/processes" "ogc processes"
 
 # Admin route should reject missing auth
-status="$(curl -s -o /dev/null -w "%{http_code}" -X POST "${API_URL}/admin/datasets/reference" \
+status="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "${API_URL}/admin/datasets/reference" \
   -H "Content-Type: application/json" \
   -d '{"name":"x","storage_uri":"s3://mantle-data/x.tif"}')"
 if [[ "$status" != "401" && "$status" != "403" ]]; then
@@ -27,7 +40,7 @@ fi
 echo "admin auth gate: ${status} (expected)"
 
 # With token, empty body should fail validation (proves admin path reachable)
-status_auth="$(curl -s -o /dev/null -w "%{http_code}" -X POST "${API_URL}/admin/datasets/reference" \
+status_auth="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "${API_URL}/admin/datasets/reference" \
   -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{}')"

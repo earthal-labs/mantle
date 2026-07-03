@@ -11,4 +11,4 @@ pub use models::{
     collection_list, default_collection, landing_catalog, StacCatalog, StacCollection,
     StacCollectionList, StacItem, StacItemCollection, StacLink, DEFAULT_COLLECTION_ID,
 };
-pub use routes::{router, StacState};
+pub use routes::{landing, router, StacState};
