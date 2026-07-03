@@ -9,27 +9,42 @@ jobs:
   rust:
     name: Rust
     runs-on: ubuntu-latest
+    # Fail fast instead of burning the 6h Actions limit on a stuck compile.
+    timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
-      # DuckDB + Arrow test binaries are memory-heavy; avoid linker OOM on 7 GiB runners.
-      CARGO_BUILD_JOBS: 1
+      # Incremental builds fight the shared cache and slow cold CI runs.
+      CARGO_INCREMENTAL: "0"
+      # Skip debuginfo in CI — DuckDB-linked test binaries link much faster.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      # Modest parallelism: enough to cut wall time, low enough to avoid linker OOM.
+      CARGO_BUILD_JOBS: "2"
+      RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-swap
         with:
-          size-gb: "8"
+          size-gb: "12"
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: cargo check
-        run: cargo check --workspace
+      # No separate `cargo check`: it rebuilds DuckDB/native deps, then `cargo test`
+      # does it again. Unit tests live in lib/bin targets only (no crates/*/tests/).
       - name: cargo test (workspace unit tests)
-        run: cargo test --workspace --exclude mantle-integration-tests -- --test-threads=2
+        run: >
+          cargo test --workspace
+          --exclude mantle-integration-tests
+          --lib --bins
+          -- --test-threads=2
       - name: integration contract tests
-        run: cargo test -p mantle-integration-tests --test contracts
+        run: cargo test -p mantle-integration-tests --test contracts -- --test-threads=1
 
   python:
     name: Python
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: python
@@ -47,6 +62,7 @@ jobs:
   compose:
     name: Docker Compose
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: Validate docker compose config
@@ -55,11 +71,26 @@ jobs:
   compose-smoke:
     name: Compose smoke
     runs-on: ubuntu-latest
+    # Pull prebuilt GHCR images (published by Docker Publish on main).
+    # Skip on PRs — building Rust images on the runner is too slow/memory-heavy.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     needs: [rust, python, compose]
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Start stack
-        run: docker compose up -d --build
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull prebuilt images and start stack
+        env:
+          GHCR_IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+          MANTLE_IMAGE_TAG: latest
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
+          docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
       - name: Wait for API health
         run: |
           for i in $(seq 1 90); do
@@ -68,7 +99,7 @@ jobs:
             fi
             sleep 2
           done
-          docker compose logs api
+          docker compose -f docker-compose.yml -f docker-compose.ghcr.yml logs api
           exit 1
       - name: Smoke checks
         run: bash scripts/smoke.sh
