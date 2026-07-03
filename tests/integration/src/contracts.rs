@@ -21,6 +21,7 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("GET", "/services/{slug}/tiles/{z}/{x}/{y}"),
     ("GET", "/plugins"),
     ("GET", "/plugins/{plugin_id}"),
+    ("GET", "/stac"),
     ("GET", "/stac/"),
     ("GET", "/stac/collections"),
     ("GET", "/stac/collections/{id}"),
