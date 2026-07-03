@@ -1,3 +1,5 @@
+# Workspace manifest for container image builds.
+# Omits tests/integration — integration tests are not shipped in api/worker images.
 [workspace]
 resolver = "2"
 members = [
@@ -12,7 +14,6 @@ members = [
     "crates/mantle-stac",
     "crates/mantle-api",
     "crates/mantle-worker",
-    "tests/integration", # omitted from Cargo.docker.toml (container builds)
 ]
 
 [workspace.package]

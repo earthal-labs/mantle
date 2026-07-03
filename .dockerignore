@@ -10,7 +10,5 @@ venv/
 !python/README.md
 helm/
 tests/
-!tests/integration/
-!tests/integration/**
 .cursor/
 agent-transcripts/
