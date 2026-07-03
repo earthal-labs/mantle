@@ -16,6 +16,8 @@ jobs:
   build-and-push:
     name: Build and push images
     runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: 1
     strategy:
       fail-fast: false
       matrix:
@@ -28,6 +30,14 @@ jobs:
             dockerfile: Dockerfile.analytics
     steps:
       - uses: actions/checkout@v4
+
+      - name: Add swap for Rust/DuckDB compile
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -5,6 +5,7 @@ WORKDIR /app
 
 COPY Cargo.toml ./
 COPY crates ./crates
+COPY tests/integration ./tests/integration
 
 RUN cargo build --release -p mantle-api \
     && strip target/release/mantle-api

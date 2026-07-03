@@ -5,21 +5,29 @@ on:
     branches: [main, master]
   pull_request:
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   rust:
     name: Rust
     runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      # DuckDB + Arrow test binaries are memory-heavy; avoid linker OOM on 7 GiB runners.
+      CARGO_BUILD_JOBS: 1
     steps:
       - uses: actions/checkout@v4
+      - name: Add swap for DuckDB linking
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: cargo check
         run: cargo check --workspace
       - name: cargo test (workspace unit tests)
-        run: cargo test --workspace --exclude mantle-integration-tests
+        run: cargo test --workspace --exclude mantle-integration-tests -- --test-threads=2
       - name: integration contract tests
         run: cargo test -p mantle-integration-tests --test contracts
 
