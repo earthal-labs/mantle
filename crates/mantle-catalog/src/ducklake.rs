@@ -42,6 +42,9 @@ impl DuckLakeSession {
 
     fn bootstrap(&self) -> Result<(), CatalogError> {
         self.with_conn(|conn| {
+            // Containers often run as `nobody` with HOME=/nonexistent; DuckDB
+            // needs a writable home to install/load extensions.
+            ensure_duckdb_home(conn)?;
             load_extension(conn, "ducklake")?;
             load_extension(conn, "spatial")?;
             load_extension(conn, "postgres")?;
@@ -232,6 +235,24 @@ impl DuckLakeSession {
                 .map_err(CatalogError::from)
         })
     }
+}
+
+fn ensure_duckdb_home(conn: &Connection) -> Result<(), CatalogError> {
+    let home = std::env::var("MANTLE_DUCKDB_HOME")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| "/tmp/mantle-duckdb".into());
+    let home = if home.is_empty() || home == "/nonexistent" {
+        "/tmp/mantle-duckdb".to_string()
+    } else {
+        home
+    };
+    std::fs::create_dir_all(&home).map_err(|e| {
+        CatalogError::Config(format!("create duckdb home '{home}': {e}"))
+    })?;
+    let home_sql = home.replace('\'', "''");
+    conn.execute_batch(&format!("SET home_directory='{home_sql}';"))
+        .map_err(|e| CatalogError::Config(format!("set duckdb home_directory: {e}")))?;
+    Ok(())
 }
 
 fn load_extension(conn: &Connection, name: &str) -> Result<(), CatalogError> {

@@ -197,8 +197,8 @@ pub async fn build_router(config: Arc<MantleConfig>) -> anyhow::Result<Router> {
 
     Ok(Router::new()
         .route("/health", get(health))
-        .route("/status/:job_id", get(get_job_status))
-        .route("/tiles/:z/:x/:y", get(get_tile))
+        .route("/status/{job_id}", get(get_job_status))
+        .route("/tiles/{z}/{x}/{y}", get(get_tile))
         .nest("/services", service_routes)
         .nest("/plugins", plugin_routes)
         .nest("/stac", stac_routes)

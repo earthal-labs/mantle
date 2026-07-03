@@ -30,6 +30,12 @@ COPY --from=builder /app/target/release/mantle-api /usr/local/bin/mantle-api
 # RUN duckdb -c "INSTALL ducklake; INSTALL spatial; INSTALL postgres;"
 
 ENV MANTLE_CONFIG=/config.toml
+# DuckDB extension install/load needs a writable home (USER nobody has /nonexistent).
+ENV HOME=/var/lib/mantle
+ENV MANTLE_DUCKDB_HOME=/var/lib/mantle/duckdb
+
+RUN mkdir -p /var/lib/mantle/duckdb \
+    && chown -R nobody:nogroup /var/lib/mantle
 
 EXPOSE 8080
 

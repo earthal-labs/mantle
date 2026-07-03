@@ -126,13 +126,21 @@ jobs:
   compose-smoke:
     name: Compose smoke
     runs-on: ubuntu-latest
-    # Pull prebuilt GHCR images (published by Docker Publish on main).
+    # Pull prebuilt GHCR images for this commit (Docker Publish runs in parallel).
     # Skip on PRs — building Rust images on the runner is too slow/memory-heavy.
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     needs: [rust, python, compose]
-    timeout-minutes: 20
+    # Allow time for Docker Publish to finish the api image (~45–50m) if it lags Rust.
+    timeout-minutes: 60
+    env:
+      GHCR_IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve short image tag
+        run: |
+          SHORT="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
+          echo "MANTLE_IMAGE_TAG=${SHORT}" >> "$GITHUB_ENV"
+          echo "Waiting for ${GHCR_IMAGE_PREFIX}/mantle-api:${SHORT}"
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -140,10 +148,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull prebuilt images and start stack
-        env:
-          GHCR_IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
-          MANTLE_IMAGE_TAG: latest
         run: |
+          # Docker Publish tags sha-<short>; poll until this commit's images exist.
+          for i in $(seq 1 60); do
+            if docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull; then
+              break
+            fi
+            echo "Images not ready yet (attempt ${i}/60); sleeping 30s..."
+            sleep 30
+          done
           docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
           docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
       - name: Wait for API health
