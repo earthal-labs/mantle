@@ -7,7 +7,8 @@ COPY Cargo.toml ./
 COPY crates ./crates
 COPY tests/integration ./tests/integration
 
-RUN cargo build --release -p mantle-worker \
+ENV CARGO_BUILD_JOBS=1
+RUN cargo build --release -j 1 -p mantle-worker \
     && strip target/release/mantle-worker
 
 FROM debian:bookworm-slim AS runtime

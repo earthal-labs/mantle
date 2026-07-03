@@ -1,0 +1,42 @@
+name: Setup swap
+description: Add swap for memory-heavy Rust/DuckDB CI builds
+inputs:
+  size-gb:
+    description: Desired swap size in gigabytes
+    required: false
+    default: "8"
+runs:
+  using: composite
+  steps:
+    - name: Configure swap
+      shell: bash
+      run: |
+        set -euo pipefail
+        WANT_GB="${{ inputs.size-gb }}"
+        SWAPFILE="${RUNNER_TEMP}/mantle-ci.swap"
+
+        CURRENT_GB=$(free -g | awk '/^Swap:/ {print $2}')
+        if [ "${CURRENT_GB:-0}" -ge "$WANT_GB" ]; then
+          echo "Swap already ${CURRENT_GB}G (>= ${WANT_GB}G); skipping"
+          free -h
+          exit 0
+        fi
+
+        if swapon --show 2>/dev/null | grep -qF "$SWAPFILE"; then
+          echo "Swap file already active: $SWAPFILE"
+          free -h
+          exit 0
+        fi
+
+        sudo swapoff "$SWAPFILE" 2>/dev/null || true
+        sudo rm -f "$SWAPFILE"
+
+        if ! sudo fallocate -l "${WANT_GB}G" "$SWAPFILE" 2>/dev/null; then
+          echo "fallocate failed; using dd"
+          sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$((WANT_GB * 1024)) status=none
+        fi
+
+        sudo chmod 600 "$SWAPFILE"
+        sudo mkswap "$SWAPFILE"
+        sudo swapon "$SWAPFILE"
+        free -h
