@@ -19,9 +19,19 @@ jobs:
       RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
     steps:
       - uses: actions/checkout@v4
+      # GitHub runners have ~14 GiB free. A 12 GiB swapfile + Arrow/DuckDB
+      # target/ artifacts exhaust the disk (os error 28). Free unused SDKs and
+      # keep swap modest — sequential CARGO_BUILD_JOBS=1 needs far less than 12 G.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h
       - uses: ./.github/actions/setup-swap
         with:
-          size-gb: "12"
+          size-gb: "4"
       - name: Install mold linker
         run: sudo apt-get update && sudo apt-get install -y mold
       - uses: dtolnay/rust-toolchain@stable
