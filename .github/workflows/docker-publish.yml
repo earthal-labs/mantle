@@ -68,16 +68,54 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  compose-smoke:
+    name: Compose smoke
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    timeout-minutes: 20
+    env:
+      GHCR_IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve image tag
+        run: |
+          # Must match docker/metadata-action type=sha,prefix=sha-,format=short
+          SHORT="sha-${GITHUB_SHA::7}"
+          echo "MANTLE_IMAGE_TAG=${SHORT}" >> "$GITHUB_ENV"
+          echo "Pulling ${GHCR_IMAGE_PREFIX}/mantle-api:${SHORT}"
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull prebuilt images and start stack
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
+          docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+      - name: Wait for API health
+        run: |
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:8080/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f docker-compose.yml -f docker-compose.ghcr.yml logs api
+          exit 1
+      - name: Smoke checks
+        run: bash scripts/smoke.sh
+
   publish-summary:
     name: Publish summary
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: [build-and-push, compose-smoke]
     if: success()
     steps:
       - name: Image tags
         run: |
           OWNER="${{ github.repository_owner }}"
-          SHA="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
+          SHA="sha-${GITHUB_SHA::7}"
           echo "## Published images" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Pull on EC2 with:" >> "$GITHUB_STEP_SUMMARY"
