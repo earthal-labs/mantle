@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1
+
+FROM rust:1.83-bookworm AS builder
+WORKDIR /app
+
+COPY Cargo.toml ./
+COPY crates ./crates
+
+RUN cargo build --release -p mantle-api \
+    && strip target/release/mantle-api
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/mantle-api /usr/local/bin/mantle-api
+
+# DuckDB extensions (ducklake, spatial, postgres) are required for full catalog
+# spatial queries. Not bundled in beta images — see docs/operations.md#duckdb-extensions-catalog
+# Example future layer:
+# RUN duckdb -c "INSTALL ducklake; INSTALL spatial; INSTALL postgres;"
+
+ENV MANTLE_CONFIG=/config.toml
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q -O- http://127.0.0.1:8080/health || exit 1
+
+USER nobody
+ENTRYPOINT ["mantle-api"]

@@ -1,0 +1,27 @@
+[server]
+bind = "0.0.0.0:8080"
+
+[storage]
+backend = "s3"  # s3 | minio
+bucket = "mantle-data"
+region = "us-east-1"
+endpoint = "http://minio:9000"  # local only
+
+[catalog]
+postgres_url = "postgres://mantle:mantle@postgres:5432/mantle"
+ducklake_data_path = "s3://mantle-data/catalog/"
+geometry_column = "footprint"
+
+[cache]
+redis_url = "redis://redis:6379"
+ifd_ttl_seconds = 86400
+
+[analytics]
+broker = "redis-streams"
+stream_key = "mantle:jobs"
+ray_address = "ray://ray-head:10001"
+vrpm_sidecar_url = "http://vrpm-sidecar:8090"
+plugin_allowlist = ["custom/vrpm", "custom/prpm"]  # relative to python/mantle_analytics/plugins/
+
+[auth]
+admin_token_env = "MANTLE_ADMIN_TOKEN"

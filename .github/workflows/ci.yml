@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check
+        run: cargo check --workspace
+      - name: cargo test (workspace unit tests)
+        run: cargo test --workspace --exclude mantle-integration-tests
+      - name: integration contract tests
+        run: cargo test -p mantle-integration-tests --test contracts
+
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - name: Sync dev dependencies
+        run: uv sync --extra dev --frozen
+      - name: pytest
+        run: uv run pytest
+
+  compose:
+    name: Docker Compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker compose config
+        run: docker compose config
+
+  compose-smoke:
+    name: Compose smoke
+    runs-on: ubuntu-latest
+    needs: [rust, python, compose]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start stack
+        run: docker compose up -d --build
+      - name: Wait for API health
+        run: |
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:8080/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs api
+          exit 1
+      - name: Smoke checks
+        run: bash scripts/smoke.sh

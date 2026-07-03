@@ -1,0 +1,23 @@
+[package]
+name = "mantle-catalog"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mantle-arrow = { path = "../mantle-arrow" }
+mantle-config = { path = "../mantle-config" }
+async-trait = "0.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+geo-types = { workspace = true }
+sqlx = { workspace = true }
+duckdb = { version = "1.10504", features = ["bundled"] }
+tokio = { workspace = true }
+url = "2"
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

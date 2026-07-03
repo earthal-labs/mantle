@@ -1,0 +1,21 @@
+[package]
+name = "mantle-ingestion"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mantle-arrow = { path = "../mantle-arrow" }
+mantle-catalog = { path = "../mantle-catalog" }
+mantle-config = { path = "../mantle-config" }
+async-trait = "0.1"
+bytes = "1"
+chrono = { workspace = true }
+futures-util = "0.3"
+object_store = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }

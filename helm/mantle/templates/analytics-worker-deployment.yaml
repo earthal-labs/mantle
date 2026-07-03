@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mantle.fullname" . }}-analytics-worker
+  labels:
+    {{- include "mantle.labels" . | nindent 4 }}
+    app.kubernetes.io/component: analytics-worker
+spec:
+  replicas: {{ .Values.analyticsWorker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mantle.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: analytics-worker
+  template:
+    metadata:
+      labels:
+        {{- include "mantle.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: analytics-worker
+    spec:
+      serviceAccountName: {{ include "mantle.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: analytics-worker
+          image: "{{ .Values.analyticsWorker.image.repository }}:{{ .Values.analyticsWorker.image.tag }}"
+          imagePullPolicy: {{ .Values.analyticsWorker.image.pullPolicy }}
+          env:
+            - name: MANTLE_CONFIG
+              value: /config/config.toml
+            - name: RAY_ADDRESS
+              value: {{ include "mantle.rayAddress" . | quote }}
+            - name: REDIS_URL
+              value: {{ include "mantle.redisUrl" . | quote }}
+            - name: MANTLE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mantle.fullname" . }}-secret
+                  key: MANTLE_ADMIN_TOKEN
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "mantle_analytics.worker"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command: ["pgrep", "-f", "mantle_analytics.worker"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.analyticsWorker.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "mantle.fullname" . }}-config

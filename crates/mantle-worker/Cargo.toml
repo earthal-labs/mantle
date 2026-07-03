@@ -1,0 +1,54 @@
+[package]
+
+name = "mantle-worker"
+
+version.workspace = true
+
+edition.workspace = true
+
+
+
+[[bin]]
+
+name = "mantle-worker"
+
+path = "src/main.rs"
+
+
+
+[dependencies]
+
+mantle-config = { path = "../mantle-config" }
+
+mantle-cache = { path = "../mantle-cache" }
+
+tokio = { workspace = true }
+
+tokio-util = { version = "0.7", features = ["rt"] }
+
+tracing = { workspace = true }
+
+tracing-subscriber = { workspace = true }
+
+anyhow = { workspace = true }
+
+sqlx = { workspace = true }
+
+serde = { workspace = true }
+
+serde_json = { workspace = true }
+
+uuid = { workspace = true }
+
+object_store = { workspace = true }
+
+bytes = "1"
+
+bincode = "1"
+
+
+
+[dev-dependencies]
+
+tokio = { workspace = true }
+

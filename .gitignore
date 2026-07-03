@@ -1,0 +1,55 @@
+# Rust
+/target/
+target/test-ducklake/
+**/*.rs.bk
+Cargo.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.*
+!.env.example
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local data / object storage volumes
+*.parquet
+/tmp/
+minio-data/
+postgres-data/
+data/
+docs/
+
+# AI tooling (local-only; do not commit agent briefs)
+.cursor/
+.cursorrules
+**/.cursor/
+.claude/
+AGENTS.md
+CLAUDE.md
+claude.md
+**/agent.md
+**/agents.md

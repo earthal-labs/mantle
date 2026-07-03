@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mantle.fullname" . }}-ray-head
+  labels:
+    {{- include "mantle.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ray-head
+spec:
+  replicas: {{ .Values.ray.head.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mantle.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ray-head
+  template:
+    metadata:
+      labels:
+        {{- include "mantle.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ray-head
+    spec:
+      containers:
+        - name: ray-head
+          image: "{{ .Values.ray.head.image.repository }}:{{ .Values.ray.head.image.tag }}"
+          imagePullPolicy: {{ .Values.ray.head.image.pullPolicy }}
+          command:
+            - ray
+            - start
+            - --head
+            - --dashboard-host=0.0.0.0
+            - --dashboard-port={{ .Values.ray.head.service.dashboardPort }}
+            - --port={{ .Values.ray.head.service.gcsPort }}
+            - --ray-client-server-port={{ .Values.ray.head.service.clientPort }}
+            - --block
+          ports:
+            - name: client
+              containerPort: {{ .Values.ray.head.service.clientPort }}
+            - name: dashboard
+              containerPort: {{ .Values.ray.head.service.dashboardPort }}
+            - name: gcs
+              containerPort: {{ .Values.ray.head.service.gcsPort }}
+          livenessProbe:
+            exec:
+              command: ["ray", "status"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            exec:
+              command: ["ray", "status"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.ray.head.resources | nindent 12 }}

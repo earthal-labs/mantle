@@ -1,0 +1,95 @@
+# Production overrides — Aurora RDS, real S3, IRSA, ingress TLS.
+# See docs/operations.md for EKS deployment steps.
+
+serviceAccount:
+  create: true
+  annotations:
+    # Grants S3 + (via sidecar/policy) RDS access without static credentials.
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/mantle-irsa
+
+api:
+  replicaCount: 3
+  image:
+    repository: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/mantle-api
+    tag: "0.1.0"
+    pullPolicy: Always
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 60
+
+worker:
+  replicaCount: 2
+  image:
+    repository: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/mantle-worker
+    tag: "0.1.0"
+    pullPolicy: Always
+
+analyticsWorker:
+  replicaCount: 2
+  image:
+    repository: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/mantle-analytics
+    tag: "0.1.0"
+    pullPolicy: Always
+
+config:
+  storage:
+    backend: s3
+    bucket: mantle-prod-data
+    region: us-east-1
+    endpoint: ""
+  catalog:
+    # Aurora PostgreSQL writer endpoint
+    postgresUrl: postgres://mantle:CHANGE_ME@mantle-aurora.cluster-XXXX.us-east-1.rds.amazonaws.com:5432/mantle
+    ducklakeDataPath: s3://mantle-prod-data/catalog/
+
+secret:
+  adminToken: ""  # inject via External Secrets Operator
+  postgresPassword: ""  # inject via External Secrets Operator
+
+redis:
+  enabled: false
+  url: redis://mantle-redis.xxxx.cache.amazonaws.com:6379
+
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:ACCOUNT_ID:certificate/XXXX
+  hosts:
+    - host: api.mantle.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: mantle-api-tls
+      hosts:
+        - api.mantle.example.com
+
+keda:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 30
+  streamKey: mantle:jobs
+  lagThreshold: "10"
+  pollingInterval: 15
+
+podDisruptionBudget:
+  enabled: true
+  api:
+    minAvailable: 2
+  worker:
+    minAvailable: 1
+  analyticsWorker:
+    minAvailable: 1
+
+networkPolicy:
+  enabled: true
+
+ray:
+  worker:
+    replicaCount: 2

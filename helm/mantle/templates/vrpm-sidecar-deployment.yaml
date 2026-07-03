@@ -1,0 +1,66 @@
+{{- if .Values.vrpmSidecar.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mantle.fullname" . }}-vrpm-sidecar
+  labels:
+    {{- include "mantle.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vrpm-sidecar
+spec:
+  replicas: {{ .Values.vrpmSidecar.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mantle.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: vrpm-sidecar
+  template:
+    metadata:
+      labels:
+        {{- include "mantle.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: vrpm-sidecar
+    spec:
+      serviceAccountName: {{ include "mantle.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: vrpm-sidecar
+          image: "{{ .Values.vrpmSidecar.image.repository }}:{{ .Values.vrpmSidecar.image.tag }}"
+          imagePullPolicy: {{ .Values.vrpmSidecar.image.pullPolicy }}
+          command: ["python", "-m", "mantle_analytics.vrpm_server"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.vrpmSidecar.service.port }}
+              protocol: TCP
+          env:
+            - name: MANTLE_VRPM_BIND
+              value: "0.0.0.0"
+            - name: MANTLE_VRPM_PORT
+              value: {{ .Values.vrpmSidecar.service.port | quote }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.vrpmSidecar.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

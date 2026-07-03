@@ -1,0 +1,25 @@
+# Pull prebuilt Mantle images from GHCR (no local Rust/Python compile).
+# Requires Docker Compose v2.24+ for build: !reset null
+#
+# Usage:
+#   export GHCR_IMAGE_PREFIX=ghcr.io/YOUR_GITHUB_USER
+#   export MANTLE_IMAGE_TAG=latest
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+
+services:
+  api:
+    image: ${GHCR_IMAGE_PREFIX}/mantle-api:${MANTLE_IMAGE_TAG:-latest}
+    build: !reset null
+
+  worker:
+    image: ${GHCR_IMAGE_PREFIX}/mantle-worker:${MANTLE_IMAGE_TAG:-latest}
+    build: !reset null
+
+  analytics-worker:
+    image: ${GHCR_IMAGE_PREFIX}/mantle-analytics:${MANTLE_IMAGE_TAG:-latest}
+    build: !reset null
+
+  vrpm-sidecar:
+    image: ${GHCR_IMAGE_PREFIX}/mantle-analytics:${MANTLE_IMAGE_TAG:-latest}
+    build: !reset null

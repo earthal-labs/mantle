@@ -1,0 +1,12 @@
+[package]
+name = "mantle-render-ast"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mantle-arrow = { path = "../mantle-arrow" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

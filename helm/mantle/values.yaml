@@ -1,0 +1,196 @@
+# Default values for local / dev-style Helm installs.
+# Use values-prod.yaml for Aurora, real S3, and IRSA.
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  annotations: {}
+  # IRSA placeholder — set in values-prod.yaml:
+  # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/mantle-irsa
+  name: ""
+
+api:
+  replicaCount: 2
+  waitForVrpmSidecar: true
+  image:
+    repository: mantle-api
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+worker:
+  replicaCount: 1
+  image:
+    repository: mantle-worker
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+analyticsWorker:
+  replicaCount: 1
+  image:
+    repository: mantle-analytics
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+vrpmSidecar:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: mantle-analytics
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8090
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+ray:
+  head:
+    replicaCount: 1
+    image:
+      repository: rayproject/ray
+      tag: "2.40.0-py311"
+      pullPolicy: IfNotPresent
+    service:
+      clientPort: 10001
+      dashboardPort: 8265
+      gcsPort: 6380
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+  worker:
+    replicaCount: 1
+    image:
+      repository: rayproject/ray
+      tag: "2.40.0-py311"
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+
+redis:
+  enabled: true
+  image:
+    repository: redis
+    tag: "7-alpine"
+    pullPolicy: IfNotPresent
+  service:
+    port: 6379
+  url: ""  # required when redis.enabled=false (see values-prod.yaml)
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+config:
+  server:
+    bind: "0.0.0.0:8080"
+  storage:
+    backend: s3
+    bucket: mantle-data
+    region: us-east-1
+    endpoint: ""
+  catalog:
+    postgresUrl: postgres://mantle:CHANGE_ME@mantle-postgres:5432/mantle
+    ducklakeDataPath: s3://mantle-data/catalog/
+    geometryColumn: footprint
+  cache:
+    ifdTtlSeconds: 86400
+  analytics:
+    broker: redis-streams
+    streamKey: mantle:jobs
+    vrpmSidecarUrl: ""
+    pluginAllowlist: ["custom/vrpm", "custom/prpm"]
+  auth:
+    adminTokenEnv: MANTLE_ADMIN_TOKEN
+
+secret:
+  # Override in values-prod.yaml or via --set-file
+  adminToken: dev-admin-token
+  postgresPassword: mantle
+  postgresUser: mantle
+  postgresDatabase: mantle
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: mantle.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+keda:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 10
+  streamKey: mantle:jobs
+  lagThreshold: "5"
+  pollingInterval: 15
+
+podDisruptionBudget:
+  enabled: true
+  api:
+    minAvailable: 1
+  worker:
+    minAvailable: 1
+  analyticsWorker:
+    minAvailable: 1
+
+networkPolicy:
+  enabled: false
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

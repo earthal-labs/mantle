@@ -1,0 +1,14 @@
+apiVersion: v2
+name: mantle
+description: Mantle cloud-native raster engine
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - geospatial
+  - raster
+  - ogc
+  - stac
+maintainers:
+  - name: Mantle Project
+    url: https://github.com/mantle-project/mantle

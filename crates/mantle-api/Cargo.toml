@@ -1,0 +1,38 @@
+[package]
+name = "mantle-api"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mantle-api"
+path = "src/main.rs"
+
+[dependencies]
+mantle-config = { path = "../mantle-config" }
+mantle-catalog = { path = "../mantle-catalog" }
+mantle-cache = { path = "../mantle-cache" }
+mantle-arrow = { path = "../mantle-arrow" }
+mantle-raster = { path = "../mantle-raster", features = ["oxigdal"] }
+mantle-render-ast = { path = "../mantle-render-ast" }
+mantle-ogc = { path = "../mantle-ogc" }
+uuid = { workspace = true }
+mantle-ingestion = { path = "../mantle-ingestion" }
+mantle-stac = { path = "../mantle-stac" }
+axum = { workspace = true, features = ["multipart"] }
+bytes = "1"
+futures-util = "0.3"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+base64 = "0.22"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+mantle-ingestion = { path = "../mantle-ingestion" }
+chrono = { workspace = true }

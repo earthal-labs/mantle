@@ -1,0 +1,31 @@
+[package]
+name = "mantle-raster"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mantle-arrow = { path = "../mantle-arrow" }
+mantle-cache = { path = "../mantle-cache" }
+mantle-catalog = { path = "../mantle-catalog" }
+mantle-config = { path = "../mantle-config" }
+mantle-render-ast = { path = "../mantle-render-ast" }
+async-trait = "0.1"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+object_store = { workspace = true }
+bytes = "1"
+bincode = "1"
+image = { version = "0.25", default-features = false, features = ["png", "webp"] }
+rayon = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+geo-types = { workspace = true }
+tracing = "0.1"
+oxigdal = { version = "0.1", features = ["geotiff", "cloud", "algorithms"], optional = true }
+
+[features]
+default = ["oxigdal"]
+oxigdal = ["dep:oxigdal"]
+
+[dev-dependencies]
+tokio = { workspace = true }

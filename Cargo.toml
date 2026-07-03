@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mantle-config",
+    "crates/mantle-arrow",
+    "crates/mantle-catalog",
+    "crates/mantle-cache",
+    "crates/mantle-raster",
+    "crates/mantle-render-ast",
+    "crates/mantle-ingestion",
+    "crates/mantle-ogc",
+    "crates/mantle-stac",
+    "crates/mantle-api",
+    "crates/mantle-worker",
+    "tests/integration",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/mantle-project/mantle"
+
+[workspace.dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+thiserror = "2"
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+arrow = "54"
+arrow-schema = "54"
+arrow-ipc = "54"
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+object_store = { version = "0.11", features = ["aws"] }
+geo-types = "0.7"
+oxigdal = { version = "0.1", default-features = false }

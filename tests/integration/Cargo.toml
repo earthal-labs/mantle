@@ -1,0 +1,60 @@
+[package]
+name = "mantle-integration-tests"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "mantle_integration"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Enables live-stack HTTP helpers in `mantle_integration::stack`.
+integration = []
+
+[dependencies]
+mantle-arrow = { path = "../../crates/mantle-arrow" }
+mantle-cache = { path = "../../crates/mantle-cache" }
+mantle-config = { path = "../../crates/mantle-config" }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+redis = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+mantle-catalog = { path = "../../crates/mantle-catalog" }
+mantle-config = { path = "../../crates/mantle-config" }
+mantle-ingestion = { path = "../../crates/mantle-ingestion" }
+mantle-raster = { path = "../../crates/mantle-raster", features = ["oxigdal"] }
+
+[[test]]
+name = "contracts"
+path = "contracts.rs"
+
+[[test]]
+name = "upload_stac_tile"
+path = "upload_stac_tile.rs"
+
+[[test]]
+name = "cloud_ref_edr"
+path = "cloud_ref_edr.rs"
+
+[[test]]
+name = "process_job_async"
+path = "process_job_async.rs"
+
+[[test]]
+name = "cache_warm_before_tile"
+path = "cache_warm_before_tile.rs"
+
+[[test]]
+name = "tile_latency"
+path = "tile_latency.rs"
+
+[[test]]
+name = "stack_health"
+path = "stack_health.rs"

@@ -1,0 +1,23 @@
+{{- if .Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "mantle.fullname" . }}-analytics-worker
+  labels:
+    {{- include "mantle.labels" . | nindent 4 }}
+    app.kubernetes.io/component: analytics-worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "mantle.fullname" . }}-analytics-worker
+  minReplicaCount: {{ .Values.keda.minReplicas }}
+  maxReplicaCount: {{ .Values.keda.maxReplicas }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: {{ include "mantle.redisUrl" . }}
+        stream: {{ .Values.keda.streamKey | quote }}
+        lagCount: {{ .Values.keda.lagThreshold | quote }}
+{{- end }}

@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mantle.fullname" . }}-ray-worker
+  labels:
+    {{- include "mantle.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ray-worker
+spec:
+  replicas: {{ .Values.ray.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mantle.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ray-worker
+  template:
+    metadata:
+      labels:
+        {{- include "mantle.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ray-worker
+    spec:
+      containers:
+        - name: ray-worker
+          image: "{{ .Values.ray.worker.image.repository }}:{{ .Values.ray.worker.image.tag }}"
+          imagePullPolicy: {{ .Values.ray.worker.image.pullPolicy }}
+          command:
+            - ray
+            - start
+            - --address={{ include "mantle.fullname" . }}-ray-head:{{ .Values.ray.head.service.gcsPort }}
+            - --block
+          livenessProbe:
+            exec:
+              command: ["ray", "status"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            exec:
+              command: ["ray", "status"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.ray.worker.resources | nindent 12 }}

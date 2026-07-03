@@ -1,0 +1,14 @@
+target/
+.git/
+.gitignore
+.idea/
+.vscode/
+.venv/
+venv/
+**/__pycache__/
+*.md
+!python/README.md
+helm/
+tests/
+.cursor/
+agent-transcripts/
