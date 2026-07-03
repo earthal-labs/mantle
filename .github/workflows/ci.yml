@@ -9,17 +9,13 @@ jobs:
   rust:
     name: Rust
     runs-on: ubuntu-latest
-    # Fail fast instead of burning the 6h Actions limit on a stuck compile.
     timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
-      # Incremental builds fight the shared cache and slow cold CI runs.
       CARGO_INCREMENTAL: "0"
-      # Skip debuginfo in CI — DuckDB-linked test binaries link much faster.
+      # Skip debuginfo — DuckDB/oxigdal-linked test binaries link much faster.
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
-      # Modest parallelism: enough to cut wall time, low enough to avoid linker OOM.
-      CARGO_BUILD_JOBS: "2"
       RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
     steps:
       - uses: actions/checkout@v4
@@ -30,15 +26,64 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y mold
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # No separate `cargo check`: it rebuilds DuckDB/native deps, then `cargo test`
-      # does it again. Unit tests live in lib/bin targets only (no crates/*/tests/).
-      - name: cargo test (workspace unit tests)
+
+      # Unit tests live in lib targets only (no crates/*/tests/, bins have no tests).
+      # Do NOT pass --bins: that links mantle-api/mantle-worker a second time for no coverage.
+      #
+      # Packages that transitively link DuckDB (and oxigdal) produce multi‑GB binaries.
+      # Linking two of those at once on a 7 GiB runner thrash-swaps and can sit on
+      # "Compiling mantle-api" for an hour. Build light crates in parallel, then
+      # fat crates one package at a time with a single codegen job.
+
+      - name: cargo test (light crates)
+        env:
+          CARGO_BUILD_JOBS: "2"
         run: >
-          cargo test --workspace
-          --exclude mantle-integration-tests
-          --lib --bins
+          cargo test --lib
+          -p mantle-config
+          -p mantle-arrow
+          -p mantle-cache
+          -p mantle-render-ast
           -- --test-threads=2
+
+      - name: cargo test (raster)
+        env:
+          CARGO_BUILD_JOBS: "1"
+        run: cargo test --lib -p mantle-raster -- --test-threads=2
+
+      - name: cargo test (catalog)
+        env:
+          CARGO_BUILD_JOBS: "1"
+        run: cargo test --lib -p mantle-catalog -- --test-threads=2
+
+      - name: cargo test (ingestion)
+        env:
+          CARGO_BUILD_JOBS: "1"
+        run: cargo test --lib -p mantle-ingestion -- --test-threads=2
+
+      - name: cargo test (stac)
+        env:
+          CARGO_BUILD_JOBS: "1"
+        run: cargo test --lib -p mantle-stac -- --test-threads=2
+
+      - name: cargo test (ogc)
+        env:
+          CARGO_BUILD_JOBS: "1"
+        run: cargo test --lib -p mantle-ogc -- --test-threads=2
+
+      - name: cargo test (worker)
+        env:
+          CARGO_BUILD_JOBS: "1"
+        run: cargo test --lib -p mantle-worker -- --test-threads=2
+
+      - name: cargo test (api)
+        env:
+          CARGO_BUILD_JOBS: "1"
+        run: cargo test --lib -p mantle-api -- --test-threads=2
+
       - name: integration contract tests
+        env:
+          CARGO_BUILD_JOBS: "1"
         run: cargo test -p mantle-integration-tests --test contracts -- --test-threads=1
 
   python:
