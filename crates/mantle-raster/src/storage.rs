@@ -17,7 +17,23 @@ pub fn build_object_store(config: &StorageConfig) -> Result<Arc<dyn ObjectStore>
         .with_bucket_name(&config.bucket)
         .with_region(&config.region);
 
-    if let Some(endpoint) = &config.endpoint {
+    if let Ok(key) = std::env::var("AWS_ACCESS_KEY_ID") {
+        if !key.is_empty() {
+            builder = builder.with_access_key_id(key);
+        }
+    }
+    if let Ok(secret) = std::env::var("AWS_SECRET_ACCESS_KEY") {
+        if !secret.is_empty() {
+            builder = builder.with_secret_access_key(secret);
+        }
+    }
+
+    let endpoint = config
+        .endpoint
+        .clone()
+        .or_else(|| std::env::var("AWS_ENDPOINT_URL").ok().filter(|s| !s.is_empty()));
+
+    if let Some(endpoint) = endpoint {
         builder = builder
             .with_endpoint(endpoint)
             .with_allow_http(true)
