@@ -52,6 +52,8 @@ impl DuckLakeSession {
             let data_path = normalize_data_path(&self.config.ducklake_data_path);
             if data_path.starts_with("s3://") {
                 load_extension(conn, "httpfs")?;
+                // DuckDB httpfs does not inherit object_store env; configure MinIO/S3 explicitly.
+                configure_s3_httpfs(conn)?;
             } else {
                 std::fs::create_dir_all(Path::new(&data_path).join("partitions"))
                     .map_err(|e| CatalogError::Config(format!("create data path: {e}")))?;
@@ -235,6 +237,49 @@ impl DuckLakeSession {
                 .map_err(CatalogError::from)
         })
     }
+}
+
+/// Configure DuckDB httpfs for MinIO / S3 using the same AWS_* env vars as compose.
+fn configure_s3_httpfs(conn: &Connection) -> Result<(), CatalogError> {
+    let key = std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default();
+    let secret = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default();
+    if key.is_empty() || secret.is_empty() {
+        warn!("AWS_ACCESS_KEY_ID/SECRET not set; DuckDB S3 catalog writes will fail");
+        return Ok(());
+    }
+
+    let key_sql = key.replace('\'', "''");
+    let secret_sql = secret.replace('\'', "''");
+    let mut sql = format!(
+        "SET s3_access_key_id='{key_sql}'; SET s3_secret_access_key='{secret_sql}'; SET s3_url_style='path';"
+    );
+
+    if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+        let host = endpoint
+            .trim()
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .trim_end_matches('/');
+        if !host.is_empty() {
+            let host_sql = host.replace('\'', "''");
+            let use_ssl = endpoint.starts_with("https://");
+            sql.push_str(&format!(
+                " SET s3_endpoint='{host_sql}'; SET s3_use_ssl={use_ssl};"
+            ));
+        }
+    }
+
+    if let Ok(region) = std::env::var("AWS_REGION") {
+        if !region.is_empty() {
+            let region_sql = region.replace('\'', "''");
+            sql.push_str(&format!(" SET s3_region='{region_sql}';"));
+        }
+    }
+
+    conn.execute_batch(&sql).map_err(|e| {
+        CatalogError::Config(format!("configure DuckDB S3/httpfs settings: {e}"))
+    })?;
+    Ok(())
 }
 
 fn ensure_duckdb_home(conn: &Connection) -> Result<(), CatalogError> {
