@@ -12,7 +12,7 @@ use admin::{attach_function, register_cloud_reference, upload_dataset};
 use auth::{load_admin_token, require_admin_auth};
 use jobs::get_job_status;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{header, StatusCode},
     middleware,
     response::{IntoResponse, Response},
@@ -179,10 +179,14 @@ pub async fn build_router(config: Arc<MantleConfig>) -> anyhow::Result<Router> {
         admin_token,
     };
 
+    // COG uploads exceed Axum's default 2 MiB body limit.
+    const ADMIN_BODY_LIMIT: usize = 512 * 1024 * 1024;
+
     let admin_routes = Router::new()
         .route("/datasets/upload", post(upload_dataset))
         .route("/datasets/reference", post(register_cloud_reference))
         .route("/services/{dataset_id}/attach", post(attach_function))
+        .layer(DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_auth,
