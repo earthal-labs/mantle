@@ -14,7 +14,12 @@ pub struct SpatialMetadata {
 impl Default for SpatialMetadata {
     fn default() -> Self {
         Self {
-            crs: Some("EPSG:4326".into()),
+            // We never parse the file's real GeoKeyDirectory tag, so we
+            // genuinely don't know the CRS — claiming EPSG:4326 here was
+            // actively wrong for projected (e.g. UTM) sources and overrode
+            // the raster engine's own, correctly-detected CRS at render time
+            // (see OxigdalRasterEngine::read_dataset_layer's fallback).
+            crs: None,
             geometry_wkt: "POLYGON((-180 -90, -180 90, 180 90, 180 -90, -180 -90))".into(),
             band_count: 1,
             nodata: None,
