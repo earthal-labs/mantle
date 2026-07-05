@@ -128,7 +128,7 @@ impl DuckLakeSession {
                     ? AS storage_uri,
                     ? AS crs,
                     ST_GeomFromText(?) AS {geom_col},
-                    ? AS cloud_cover,
+                    ?::DOUBLE AS cloud_cover,
                     ? AS partition_key,
                     NULLIF(?, '')::TIMESTAMPTZ AS temporal_start,
                     NULLIF(?, '')::TIMESTAMPTZ AS temporal_end,
