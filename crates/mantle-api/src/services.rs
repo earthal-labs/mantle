@@ -386,7 +386,7 @@ fn band_indices_for_function(function_id: &str, params: &Value) -> HashMap<Strin
     map
 }
 
-fn catalog_err(err: CatalogError) -> ApiError {
+pub(crate) fn catalog_err(err: CatalogError) -> ApiError {
     match err {
         CatalogError::NotFound(id) => ApiError::new(StatusCode::NOT_FOUND, format!("not found: {id}")),
         CatalogError::ServiceNotFound(slug) => {

@@ -47,7 +47,7 @@ pub(crate) async fn fetch_virtual_service_by_slug(
         r#"
         SELECT id, slug, service_kind, dataset_id, parent_dataset_id, function_id, params_defaults, created_at
         FROM virtual_services
-        WHERE slug = $1
+        WHERE slug = $1 AND deleted_at IS NULL
         "#,
     )
     .bind(&normalized)
@@ -92,7 +92,7 @@ impl From<VirtualServiceRow> for VirtualServiceRecord {
 pub(crate) async fn slug_exists(pool: &PgPool, slug: &str) -> Result<bool, CatalogError> {
     let row: (bool,) = sqlx::query_as(
         r#"
-        SELECT EXISTS(SELECT 1 FROM virtual_services WHERE slug = $1)
+        SELECT EXISTS(SELECT 1 FROM virtual_services WHERE slug = $1 AND deleted_at IS NULL)
         "#,
     )
     .bind(slug)

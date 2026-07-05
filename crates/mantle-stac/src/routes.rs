@@ -204,6 +204,22 @@ mod tests {
         ) -> Result<VirtualServiceRecord, CatalogError> {
             Err(CatalogError::NotFound(Uuid::nil()))
         }
+
+        async fn soft_delete_dataset(
+            &self,
+            dataset_id: Uuid,
+            _reason: Option<String>,
+        ) -> Result<mantle_catalog::DeletionRecord, CatalogError> {
+            Err(CatalogError::NotFound(dataset_id))
+        }
+
+        async fn get_dataset_any(&self, id: Uuid) -> Result<DatasetRecord, CatalogError> {
+            Err(CatalogError::NotFound(id))
+        }
+
+        async fn purge_dataset(&self, dataset_id: Uuid) -> Result<(), CatalogError> {
+            Err(CatalogError::NotFound(dataset_id))
+        }
     }
 
     #[derive(Clone)]
@@ -228,6 +244,7 @@ mod tests {
                 format: DatasetFormat::Cog,
                 storage_uri: format!("s3://bucket/{i}.tif"),
                 crs: None,
+                geometry_wkt: None,
             })
             .collect();
 
@@ -251,6 +268,8 @@ mod tests {
             postgres_url: "postgres://localhost/mantle".into(),
             ducklake_data_path: "./data/".into(),
             geometry_column: "footprint".into(),
+            purge_retention_days: 7,
+            purge_poll_interval_seconds: 3600,
         });
         let _state = StacState {
             catalog: Arc::new(StubCatalogClient::new(config)),

@@ -53,6 +53,25 @@ pub fn build_object_store(config: &StorageConfig) -> Result<Arc<dyn ObjectStore>
         .map_err(|e| IngestionError::Storage(format!("failed to build object store: {e}")))
 }
 
+/// Delete an object by its `s3://bucket/key` storage URI. Tolerates the
+/// object already being gone (treats `NotFound` as success), so purge
+/// retries after a partial failure are safe.
+pub async fn delete_by_storage_uri(
+    store: Arc<dyn ObjectStore>,
+    bucket: &str,
+    storage_uri: &str,
+) -> Result<(), IngestionError> {
+    let key = storage_uri
+        .strip_prefix(&format!("s3://{bucket}/"))
+        .unwrap_or(storage_uri);
+    let path = Path::from(key.trim_start_matches('/'));
+    match store.delete(&path).await {
+        Ok(()) => Ok(()),
+        Err(object_store::Error::NotFound { .. }) => Ok(()),
+        Err(e) => Err(IngestionError::Storage(format!("delete {key} failed: {e}"))),
+    }
+}
+
 pub fn dataset_object_key(dataset_id: uuid::Uuid, filename: &str) -> String {
     let safe_name = sanitize_filename(filename);
     format!("datasets/{dataset_id}/{safe_name}")

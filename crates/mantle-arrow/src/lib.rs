@@ -17,6 +17,9 @@ pub struct DatasetRef {
     pub format: DatasetFormat,
     pub storage_uri: String,
     pub crs: Option<String>,
+    /// Footprint geometry as WKT (e.g. `POLYGON((...))`), when known.
+    #[serde(default)]
+    pub geometry_wkt: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +165,9 @@ pub fn decode_dataset_refs(bytes: &[u8]) -> Result<Vec<DatasetRef>, ArrowError> 
                 } else {
                     Some(crs_col.value(i).to_string())
                 },
+                // Not part of the Arrow IPC schema (Rust<->Python handoff
+                // doesn't need footprint geometry, only raster access).
+                geometry_wkt: None,
             });
         }
     }

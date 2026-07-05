@@ -31,6 +31,18 @@ pub struct CatalogConfig {
     pub postgres_url: String,
     pub ducklake_data_path: String,
     pub geometry_column: String,
+    #[serde(default = "default_purge_retention_days")]
+    pub purge_retention_days: u64,
+    #[serde(default = "default_purge_poll_interval_seconds")]
+    pub purge_poll_interval_seconds: u64,
+}
+
+fn default_purge_retention_days() -> u64 {
+    7
+}
+
+fn default_purge_poll_interval_seconds() -> u64 {
+    3600
 }
 
 #[derive(Debug, Clone, Deserialize)]

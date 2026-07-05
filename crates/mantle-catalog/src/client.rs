@@ -1,13 +1,16 @@
 use crate::ducklake::DuckLakeSession;
 use crate::error::CatalogError;
-use crate::postgres::{fetch_dataset, insert_dataset, insert_footprint_row};
+use crate::postgres::{fetch_dataset, fetch_dataset_any, insert_dataset, insert_footprint_row};
 use crate::services::sanitize_slug;
 use crate::virtual_services::{
     attach_function_to_dataset, fetch_virtual_service_by_slug, insert_virtual_service,
     slug_exists,
 };
-use crate::{DatasetRecord, FootprintRecord, SpatialQuery, VirtualServiceKind, VirtualServiceRecord};
-use chrono::Utc;
+use crate::{
+    DatasetRecord, DeletionRecord, FootprintRecord, SpatialQuery, VirtualServiceKind,
+    VirtualServiceRecord,
+};
+use chrono::{DateTime, Utc};
 use async_trait::async_trait;
 use mantle_arrow::DatasetRef;
 use mantle_config::CatalogConfig;
@@ -171,5 +174,104 @@ impl crate::CatalogClient for PostgresDuckLakeCatalog {
         };
         tx.commit().await?;
         Ok(record)
+    }
+
+    async fn soft_delete_dataset(
+        &self,
+        dataset_id: Uuid,
+        reason: Option<String>,
+    ) -> Result<DeletionRecord, CatalogError> {
+        // Ensure the dataset exists at all (any state) before tombstoning it.
+        fetch_dataset_any(&self.pool, dataset_id).await?;
+
+        let mut tx = self.pool.begin().await?;
+
+        let inserted: Option<DateTime<Utc>> = sqlx::query_scalar(
+            r#"
+            INSERT INTO dataset_deletions (dataset_id, reason)
+            VALUES ($1, $2)
+            ON CONFLICT (dataset_id) DO NOTHING
+            RETURNING deleted_at
+            "#,
+        )
+        .bind(dataset_id)
+        .bind(&reason)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        // Idempotent: if a tombstone already existed, return its original
+        // deleted_at rather than erroring on retry.
+        let deleted_at = match inserted {
+            Some(ts) => ts,
+            None => {
+                sqlx::query_scalar(
+                    "SELECT deleted_at FROM dataset_deletions WHERE dataset_id = $1",
+                )
+                .bind(dataset_id)
+                .fetch_one(&mut *tx)
+                .await?
+            }
+        };
+
+        sqlx::query(
+            r#"
+            UPDATE virtual_services SET deleted_at = now()
+            WHERE (dataset_id = $1 OR parent_dataset_id = $1) AND deleted_at IS NULL
+            "#,
+        )
+        .bind(dataset_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        let purge_eligible_at =
+            deleted_at + chrono::Duration::days(self.config.purge_retention_days as i64);
+
+        Ok(DeletionRecord {
+            dataset_id,
+            deleted_at,
+            purge_eligible_at,
+        })
+    }
+
+    async fn get_dataset_any(&self, id: Uuid) -> Result<DatasetRecord, CatalogError> {
+        fetch_dataset_any(&self.pool, id).await
+    }
+
+    async fn purge_dataset(&self, dataset_id: Uuid) -> Result<(), CatalogError> {
+        let ducklake = self.ducklake.clone();
+        tokio::task::spawn_blocking(move || ducklake.purge_dataset(dataset_id))
+            .await
+            .map_err(|e| CatalogError::Config(format!("ducklake task join: {e}")))??;
+
+        let mut tx = self.pool.begin().await?;
+        // Narrow, session-scoped bypass of the append-only trigger — see
+        // migrations/004_dataset_deletion.sql. Ordinary connections never set
+        // this, so they remain fully blocked.
+        sqlx::query("SET LOCAL mantle.allow_purge = 'on'")
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query("DELETE FROM virtual_services WHERE dataset_id = $1 OR parent_dataset_id = $1")
+            .bind(dataset_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM footprints WHERE dataset_id = $1")
+            .bind(dataset_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM datasets WHERE id = $1")
+            .bind(dataset_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE dataset_deletions SET purged_at = now() WHERE dataset_id = $1")
+            .bind(dataset_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        info!(%dataset_id, "dataset purged");
+        Ok(())
     }
 }

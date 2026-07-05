@@ -584,6 +584,8 @@ mod tests {
                 postgres_url: "postgres://localhost/mantle".into(),
                 ducklake_data_path: "./data/".into(),
                 geometry_column: "footprint".into(),
+                purge_retention_days: 7,
+                purge_poll_interval_seconds: 3600,
             }))),
             raster: Arc::new(StubRasterEngine::new(storage, cache)),
             jobs: Arc::new(StubJobQueueClient),

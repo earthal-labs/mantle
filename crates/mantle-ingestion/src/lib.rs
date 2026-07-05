@@ -10,7 +10,8 @@ mod virtualize;
 
 pub use service::MantleIngestionService;
 pub use storage::{
-    build_object_store, dataset_object_key, storage_uri, upload_stream_with_header_peek,
+    build_object_store, dataset_object_key, delete_by_storage_uri, storage_uri,
+    upload_stream_with_header_peek,
 };
 pub use uri::{validate_storage_uri, ReferenceFormat, ReferenceScheme, ValidatedUri};
 
@@ -47,6 +48,8 @@ pub enum IngestionError {
     Storage(String),
     #[error("virtualize error: {0}")]
     Virtualize(String),
+    #[error("not a valid Cloud-Optimized GeoTIFF: {0}")]
+    NotCog(String),
     #[error("catalog error: {0}")]
     Catalog(#[from] CatalogError),
 }

@@ -8,7 +8,9 @@ mod vrpm_client;
 mod plugins;
 mod services;
 
-use admin::{attach_function, register_cloud_reference, upload_dataset};
+use admin::{
+    attach_function, delete_dataset, purge_dataset, register_cloud_reference, upload_dataset,
+};
 use auth::{load_admin_token, require_admin_auth};
 use jobs::get_job_status;
 use axum::{
@@ -185,6 +187,8 @@ pub async fn build_router(config: Arc<MantleConfig>) -> anyhow::Result<Router> {
     let admin_routes = Router::new()
         .route("/datasets/upload", post(upload_dataset))
         .route("/datasets/reference", post(register_cloud_reference))
+        .route("/datasets/{id}/delete", post(delete_dataset))
+        .route("/datasets/{id}/purge", post(purge_dataset))
         .route("/services/{dataset_id}/attach", post(attach_function))
         .layer(DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .route_layer(middleware::from_fn_with_state(

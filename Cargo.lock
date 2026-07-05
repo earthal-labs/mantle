@@ -3073,6 +3073,7 @@ dependencies = [
  "bincode",
  "bytes",
  "mantle-cache",
+ "mantle-catalog",
  "mantle-config",
  "object_store",
  "serde",

@@ -44,6 +44,7 @@ impl From<IngestionError> for ApiError {
     fn from(err: IngestionError) -> Self {
         match err {
             IngestionError::InvalidUri(msg) => ApiError::new(StatusCode::BAD_REQUEST, msg),
+            IngestionError::NotCog(msg) => ApiError::new(StatusCode::BAD_REQUEST, msg),
             IngestionError::Catalog(catalog_err) => {
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, catalog_err.to_string())
             }

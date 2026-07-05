@@ -47,6 +47,8 @@ async fn tile_latency_p99_under_10ms() {
             .unwrap_or_else(|_| "postgres://mantle:mantle@localhost:5432/mantle".into()),
         ducklake_data_path: "./target/test-ducklake/".into(),
         geometry_column: "footprint".into(),
+        purge_retention_days: 7,
+        purge_poll_interval_seconds: 3600,
     });
 
     let cache: Arc<dyn mantle_cache::CacheClient> =
@@ -70,6 +72,7 @@ async fn tile_latency_p99_under_10ms() {
         storage_uri: std::env::var(env::COG_URI)
             .unwrap_or_else(|_| "s3://mantle-data/fixtures/sample.tif".into()),
         crs: Some("EPSG:4326".into()),
+        geometry_wkt: None,
     };
     let warm_request = TileRequest {
         dataset_id: fixture_id,

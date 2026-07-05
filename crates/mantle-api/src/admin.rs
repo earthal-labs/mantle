@@ -4,16 +4,19 @@ use crate::error::ApiError;
 use crate::services;
 use crate::AppState;
 use axum::{
-    extract::{Multipart, State},
+    extract::{Multipart, Path, State},
     http::StatusCode,
     Json,
 };
 use futures_util::{StreamExt, TryStreamExt};
 use mantle_ingestion::{
-    build_object_store, dataset_object_key, storage_uri, upload_stream_with_header_peek,
-    CloudReferenceRequest, IngestionError, IngestionResponse, UploadRequest,
+    build_object_store, dataset_object_key, delete_by_storage_uri, storage_uri,
+    upload_stream_with_header_peek, CloudReferenceRequest, IngestionError, IngestionResponse,
+    UploadRequest,
 };
+use serde::Deserialize;
 use tracing::info;
+use uuid::Uuid;
 
 /// `POST /admin/datasets/upload` — multipart upload (field `file`, optional `name`).
 pub async fn upload_dataset(
@@ -105,6 +108,58 @@ pub async fn register_cloud_reference(
 
     info!(%dataset_id, "cloud reference registered via admin API");
     Ok(Json(IngestionResponse { dataset_id }))
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct DeleteDatasetRequest {
+    pub reason: Option<String>,
+}
+
+/// `POST /admin/datasets/{id}/delete` — soft-delete: hidden from every read
+/// path immediately, physically purged later (scheduled job or `/purge`).
+pub async fn delete_dataset(
+    State(state): State<AppState>,
+    Path(dataset_id): Path<Uuid>,
+    body: Option<Json<DeleteDatasetRequest>>,
+) -> Result<Json<mantle_catalog::DeletionRecord>, ApiError> {
+    let reason = body.and_then(|Json(b)| b.reason);
+    let record = state
+        .catalog
+        .soft_delete_dataset(dataset_id, reason)
+        .await
+        .map_err(services::catalog_err)?;
+
+    info!(%dataset_id, "dataset soft-deleted via admin API");
+    Ok(Json(record))
+}
+
+/// `POST /admin/datasets/{id}/purge` — admin-only immediate hard purge,
+/// bypassing the retention window. Requires the dataset to have been
+/// soft-deleted first (`get_dataset_any` still finds it, `get_dataset` would
+/// 404 on it since it's tombstoned).
+pub async fn purge_dataset(
+    State(state): State<AppState>,
+    Path(dataset_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let dataset = state
+        .catalog
+        .get_dataset_any(dataset_id)
+        .await
+        .map_err(services::catalog_err)?;
+
+    let store = build_object_store(&state.config.storage).map_err(ApiError::from)?;
+    delete_by_storage_uri(store, &state.config.storage.bucket, &dataset.storage_uri)
+        .await
+        .map_err(ApiError::from)?;
+
+    state
+        .catalog
+        .purge_dataset(dataset_id)
+        .await
+        .map_err(services::catalog_err)?;
+
+    info!(%dataset_id, "dataset purged via admin API (immediate override)");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub use services::attach_function;

@@ -79,6 +79,31 @@ pub(crate) async fn fetch_dataset(
         SELECT id, name, format, storage_uri, crs, temporal_start, temporal_end, created_at
         FROM datasets
         WHERE id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM dataset_deletions dd WHERE dd.dataset_id = datasets.id
+          )
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(Into::into)
+        .ok_or(CatalogError::NotFound(id))
+}
+
+/// Like [`fetch_dataset`] but ignores the soft-delete tombstone — used only by
+/// the purge routine, which legitimately needs to see a soft-deleted dataset's
+/// `storage_uri` in order to reclaim it.
+pub(crate) async fn fetch_dataset_any(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<DatasetRecord, CatalogError> {
+    let row = sqlx::query_as::<_, DatasetRow>(
+        r#"
+        SELECT id, name, format, storage_uri, crs, temporal_start, temporal_end, created_at
+        FROM datasets
+        WHERE id = $1
         "#,
     )
     .bind(id)

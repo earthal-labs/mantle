@@ -91,6 +91,8 @@ mod tests {
                 postgres_url: "postgres://localhost/mantle".into(),
                 ducklake_data_path: "s3://mantle-data/catalog/".into(),
                 geometry_column: "footprint".into(),
+                purge_retention_days: 7,
+                purge_poll_interval_seconds: 3600,
             },
             cache: CacheConfig {
                 redis_url: "redis://localhost:6379".into(),
@@ -115,6 +117,8 @@ mod tests {
                     postgres_url: "postgres://localhost/mantle".into(),
                     ducklake_data_path: "s3://mantle-data/catalog/".into(),
                     geometry_column: "footprint".into(),
+                    purge_retention_days: 7,
+                    purge_poll_interval_seconds: 3600,
                 },
             ))),
             cache: Arc::new(mantle_cache::StubCacheClient::new(Arc::new(CacheConfig {
@@ -138,6 +142,8 @@ mod tests {
                     postgres_url: "postgres://localhost/mantle".into(),
                     ducklake_data_path: "s3://mantle-data/catalog/".into(),
                     geometry_column: "footprint".into(),
+                    purge_retention_days: 7,
+                    purge_poll_interval_seconds: 3600,
                 })),
             ))),
             jobs,

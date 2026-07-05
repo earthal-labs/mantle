@@ -18,13 +18,20 @@ pub fn dataset_to_stac_item(dataset: &DatasetRef) -> StacItem {
         DatasetFormat::Icechunk => "icechunk",
     };
 
+    let (bbox, geometry) = dataset
+        .geometry_wkt
+        .as_deref()
+        .and_then(polygon_wkt_to_geojson)
+        .map(|(bbox, geometry)| (Some(bbox), Some(geometry)))
+        .unwrap_or((None, None));
+
     StacItem {
         type_: "Feature".into(),
         stac_version: "1.0.0".into(),
         id: dataset.id.to_string(),
         collection: DEFAULT_COLLECTION_ID.into(),
-        geometry: None,
-        bbox: None,
+        geometry,
+        bbox,
         properties: serde_json::json!({
             "title": dataset.name,
             "mantle:format": format_str,
@@ -49,6 +56,57 @@ pub fn dataset_to_stac_item(dataset: &DatasetRef) -> StacItem {
             link("collection", &format!("/stac/collections/{DEFAULT_COLLECTION_ID}"), Some("application/json")),
         ],
     }
+}
+
+/// Parse bbox + GeoJSON geometry from a WKT `POLYGON(...)` string, as
+/// produced by DuckDB's `ST_AsText`. Only single-ring polygons are handled —
+/// the only shape this system ever stores for a footprint. Anything else
+/// (unexpected geometry type, malformed text) yields `None` rather than a
+/// wrong bbox.
+fn polygon_wkt_to_geojson(wkt: &str) -> Option<(Vec<f64>, serde_json::Value)> {
+    let trimmed = wkt.trim();
+    if !trimmed.to_ascii_uppercase().starts_with("POLYGON") {
+        return None;
+    }
+
+    let start = trimmed.find('(')?;
+    let end = trimmed.rfind(')')?;
+    if end <= start {
+        return None;
+    }
+    let ring = trimmed[start + 1..end]
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')');
+
+    let mut points = Vec::new();
+    for point in ring.split(',') {
+        let mut parts = point.split_whitespace();
+        let x: f64 = parts.next()?.parse().ok()?;
+        let y: f64 = parts.next()?.parse().ok()?;
+        points.push(vec![x, y]);
+    }
+    if points.is_empty() {
+        return None;
+    }
+
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for point in &points {
+        min_x = min_x.min(point[0]);
+        max_x = max_x.max(point[0]);
+        min_y = min_y.min(point[1]);
+        max_y = max_y.max(point[1]);
+    }
+
+    let bbox = vec![min_x, min_y, max_x, max_y];
+    let geometry = serde_json::json!({
+        "type": "Polygon",
+        "coordinates": [points],
+    });
+    Some((bbox, geometry))
 }
 
 fn asset_media_type(format: DatasetFormat) -> &'static str {
@@ -110,6 +168,7 @@ mod tests {
             format: DatasetFormat::Cog,
             storage_uri: "s3://mantle-data/tiles/s2.tif".into(),
             crs: Some("EPSG:4326".into()),
+            geometry_wkt: None,
         }
     }
 
@@ -151,5 +210,39 @@ mod tests {
         assert_eq!(collection.type_, "FeatureCollection");
         assert_eq!(collection.number_matched, Some(1));
         assert_eq!(collection.number_returned, Some(1));
+    }
+
+    #[test]
+    fn stac_item_has_null_bbox_geometry_without_footprint() {
+        let item = dataset_to_stac_item(&sample_dataset());
+        assert!(item.bbox.is_none());
+        assert!(item.geometry.is_none());
+    }
+
+    #[test]
+    fn stac_item_derives_bbox_and_geometry_from_wkt() {
+        let mut dataset = sample_dataset();
+        dataset.geometry_wkt =
+            Some("POLYGON ((-10 -5, -10 5, 10 5, 10 -5, -10 -5))".to_string());
+
+        let item = dataset_to_stac_item(&dataset);
+        assert_eq!(item.bbox, Some(vec![-10.0, -5.0, 10.0, 5.0]));
+        let geometry = item.geometry.expect("geometry present");
+        assert_eq!(geometry.get("type").and_then(|v| v.as_str()), Some("Polygon"));
+        assert_eq!(
+            geometry
+                .get("coordinates")
+                .and_then(|v| v.as_array())
+                .and_then(|rings| rings.first())
+                .and_then(|ring| ring.as_array())
+                .map(|ring| ring.len()),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn polygon_wkt_parser_rejects_non_polygon() {
+        assert!(polygon_wkt_to_geojson("POINT (1 2)").is_none());
+        assert!(polygon_wkt_to_geojson("not wkt at all").is_none());
     }
 }

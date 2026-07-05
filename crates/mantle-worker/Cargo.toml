@@ -22,6 +22,8 @@ mantle-config = { path = "../mantle-config" }
 
 mantle-cache = { path = "../mantle-cache" }
 
+mantle-catalog = { path = "../mantle-catalog" }
+
 tokio = { workspace = true }
 
 tokio-util = { version = "0.7", features = ["rt"] }

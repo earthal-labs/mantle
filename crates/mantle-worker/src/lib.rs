@@ -7,13 +7,16 @@ mod storage;
 pub use catalog::FOOTPRINT_INSERTED_CHANNEL;
 
 use crate::prefetch::{fetch_cog_ifd_blob, fetch_zmetadata_blob};
-use crate::storage::{build_object_store, parse_storage_uri};
+use crate::storage::{build_object_store, object_path, parse_storage_uri};
 use mantle_cache::{CacheClient, RedisCacheClient};
+use mantle_catalog::{CatalogClient, PostgresDuckLakeCatalog};
 use mantle_config::MantleConfig;
+use object_store::ObjectStore;
 use serde::Deserialize;
 use sqlx::postgres::PgListener;
 use sqlx::PgPool;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -77,11 +80,28 @@ impl CacheWarmer {
         listener.listen(FOOTPRINT_INSERTED_CHANNEL).await?;
         info!(channel = FOOTPRINT_INSERTED_CHANNEL, "listening for footprint inserts");
 
+        // Separate connection from `self.pool`: this one owns the DuckLake
+        // session needed to physically reclaim a purged dataset's Parquet file.
+        let catalog: Arc<dyn CatalogClient> = Arc::new(
+            PostgresDuckLakeCatalog::connect(Arc::new(self.config.catalog.clone())).await?,
+        );
+        let mut purge_ticker = tokio::time::interval(Duration::from_secs(
+            self.config.catalog.purge_poll_interval_seconds.max(1),
+        ));
+        info!(
+            retention_days = self.config.catalog.purge_retention_days,
+            poll_interval_seconds = self.config.catalog.purge_poll_interval_seconds,
+            "scheduled dataset purge enabled"
+        );
+
         loop {
             tokio::select! {
                 _ = self.shutdown.cancelled() => {
                     info!("mantle-worker shutting down");
                     break;
+                }
+                _ = purge_ticker.tick() => {
+                    self.run_purge_tick(catalog.as_ref()).await;
                 }
                 notification = listener.recv() => {
                     match notification {
@@ -101,6 +121,52 @@ impl CacheWarmer {
             }
         }
 
+        Ok(())
+    }
+
+    /// Purge any datasets whose soft-delete retention window has elapsed.
+    /// Logs and continues past individual failures so one bad row doesn't
+    /// block the rest of the batch or the next tick.
+    async fn run_purge_tick(&self, catalog: &dyn CatalogClient) {
+        let retention_days = self.config.catalog.purge_retention_days as i32;
+        let rows: Result<Vec<(Uuid,)>, sqlx::Error> = sqlx::query_as(
+            r#"
+            SELECT dataset_id FROM dataset_deletions
+            WHERE deleted_at < now() - make_interval(days => $1)
+              AND purged_at IS NULL
+            LIMIT 20
+            "#,
+        )
+        .bind(retention_days)
+        .fetch_all(&self.pool)
+        .await;
+
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(err) => {
+                error!(error = %err, "failed to query purge-eligible datasets");
+                return;
+            }
+        };
+
+        for (dataset_id,) in rows {
+            if let Err(err) = self.purge_one(catalog, dataset_id).await {
+                error!(%dataset_id, error = %err, "purge failed, will retry next tick");
+            }
+        }
+    }
+
+    async fn purge_one(&self, catalog: &dyn CatalogClient, dataset_id: Uuid) -> anyhow::Result<()> {
+        let dataset = catalog.get_dataset_any(dataset_id).await?;
+        let (_bucket, key) = parse_storage_uri(&dataset.storage_uri, &self.config.storage.bucket)?;
+        let path = object_path(&key);
+        match self.store.delete(&path).await {
+            Ok(()) => {}
+            Err(object_store::Error::NotFound { .. }) => {}
+            Err(err) => return Err(err.into()),
+        }
+        catalog.purge_dataset(dataset_id).await?;
+        info!(%dataset_id, "dataset purged by scheduled job");
         Ok(())
     }
 

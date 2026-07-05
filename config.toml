@@ -11,6 +11,8 @@ endpoint = "http://minio:9000"  # local only
 postgres_url = "postgres://mantle:mantle@postgres:5432/mantle"
 ducklake_data_path = "s3://mantle-data/catalog/"
 geometry_column = "footprint"
+purge_retention_days = 7        # grace window after soft-delete before hard purge
+purge_poll_interval_seconds = 3600  # how often mantle-worker checks for eligible purges
 
 [cache]
 redis_url = "redis://redis:6379"

@@ -11,6 +11,10 @@ use uuid::Uuid;
 pub(crate) const CATALOG_ALIAS: &str = "mantle_catalog";
 pub(crate) const FOOTPRINTS_TABLE: &str = "footprints";
 pub(crate) const GEOPARQUET_VERSION: &str = "V2";
+/// Plain (non-DuckLake) read-only attach to the same Postgres database, used
+/// only to check `dataset_deletions` from within DuckDB queries — Postgres is
+/// the single source of truth for the soft-delete tombstone, not DuckLake.
+pub(crate) const APP_POSTGRES_ALIAS: &str = "app_postgres";
 
 #[derive(Clone)]
 pub(crate) struct DuckLakeSession {
@@ -67,6 +71,13 @@ impl DuckLakeSession {
             conn.execute_batch(&attach)?;
             conn.execute_batch(&format!("USE {CATALOG_ALIAS};"))?;
             self.ensure_footprints_table(conn)?;
+
+            let app_postgres_attach = format!(
+                "ATTACH '{}' AS {APP_POSTGRES_ALIAS} (TYPE POSTGRES, READ_ONLY);",
+                postgres_attach_params(&self.config.postgres_url)?
+            );
+            debug!("attaching plain postgres for soft-delete tombstone checks");
+            conn.execute_batch(&app_postgres_attach)?;
             Ok(())
         })
     }
@@ -194,9 +205,14 @@ impl DuckLakeSession {
                 name,
                 format,
                 storage_uri,
-                crs
-            FROM {CATALOG_ALIAS}.{FOOTPRINTS_TABLE}
+                crs,
+                ST_AsText({geom_col}) AS geometry_wkt
+            FROM {CATALOG_ALIAS}.{FOOTPRINTS_TABLE} f
             WHERE 1=1
+              AND NOT EXISTS (
+                  SELECT 1 FROM {APP_POSTGRES_ALIAS}.dataset_deletions d
+                  WHERE d.dataset_id = f.dataset_id
+              )
             "#
         );
 
@@ -230,11 +246,43 @@ impl DuckLakeSession {
                     format: crate::postgres::format_from_db(row.get::<_, String>(2)?.as_str()),
                     storage_uri: row.get(3)?,
                     crs: row.get(4)?,
+                    geometry_wkt: row.get(5)?,
                 })
             })?;
 
             rows.collect::<Result<Vec<_>, _>>()
                 .map_err(CatalogError::from)
+        })
+    }
+
+    /// Physically remove a dataset's footprint row from the DuckLake-backed
+    /// table and reclaim its Parquet file. A real `DELETE` here supersedes the
+    /// row's current snapshot; expiring snapshots + cleaning up old files then
+    /// makes the now-orphaned file eligible for physical removal. This is
+    /// native DuckLake DML — not subject to the Postgres append-only trigger,
+    /// which only covers the plain `datasets`/`footprints` tables.
+    ///
+    /// Note: `ducklake_cleanup_old_files` is known to no-op against an
+    /// external Postgres catalog on some DuckLake builds
+    /// (https://github.com/duckdb/ducklake/issues/586) — this call can
+    /// silently fail to reclaim storage even though it reports success. The
+    /// delete from the logical table (and hence from search/read results)
+    /// still takes effect regardless.
+    pub fn purge_dataset(&self, dataset_id: Uuid) -> Result<(), CatalogError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                &format!("DELETE FROM {CATALOG_ALIAS}.{FOOTPRINTS_TABLE} WHERE dataset_id = ?;"),
+                duckdb::params![dataset_id.to_string()],
+            )?;
+            conn.execute_batch(&format!(
+                "CALL ducklake_expire_snapshots('{CATALOG_ALIAS}', older_than => now());"
+            ))?;
+            if let Err(err) = conn.execute_batch(&format!(
+                "CALL ducklake_cleanup_old_files('{CATALOG_ALIAS}', cleanup_all => true);"
+            )) {
+                warn!("ducklake_cleanup_old_files failed for dataset {dataset_id}: {err}");
+            }
+            Ok(())
         })
     }
 }

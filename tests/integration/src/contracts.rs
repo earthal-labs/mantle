@@ -51,6 +51,7 @@ pub fn sample_dataset_ref() -> DatasetRef {
         format: DatasetFormat::Cog,
         storage_uri: "s3://mantle-data/datasets/contract.tif".into(),
         crs: Some("EPSG:4326".into()),
+        geometry_wkt: None,
     }
 }
 

@@ -63,6 +63,10 @@ impl DatasetRecord {
             format: self.format,
             storage_uri: self.storage_uri.clone(),
             crs: self.crs.clone(),
+            // DatasetRecord doesn't carry footprint geometry (that lives in
+            // FootprintRecord/the DuckLake-backed table) — only spatial_query
+            // populates this field.
+            geometry_wkt: None,
         }
     }
 }
@@ -73,6 +77,16 @@ pub struct FootprintRecord {
     pub geometry_wkt: String,
     pub cloud_cover: Option<f64>,
     pub partition_key: String,
+}
+
+/// Result of a soft-delete: hidden from all reads immediately, physically
+/// purged once `purge_eligible_at` passes (unless purged sooner via the
+/// immediate-purge admin override).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletionRecord {
+    pub dataset_id: Uuid,
+    pub deleted_at: DateTime<Utc>,
+    pub purge_eligible_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -117,6 +131,31 @@ pub trait CatalogClient: Send + Sync {
         function_id: String,
         endpoint_slug: String,
     ) -> Result<VirtualServiceRecord, CatalogError>;
+
+    /// Hide a dataset (and any virtual services attached to or produced from
+    /// it) from every read path immediately. The underlying rows/files are
+    /// physically removed later by the purge job, or immediately via the
+    /// admin purge-now override. Idempotent: calling it again on an
+    /// already-deleted dataset returns the original `deleted_at`.
+    async fn soft_delete_dataset(
+        &self,
+        dataset_id: Uuid,
+        reason: Option<String>,
+    ) -> Result<DeletionRecord, CatalogError>;
+
+    /// Like [`CatalogClient::get_dataset`] but ignores the soft-delete
+    /// tombstone. Used only by purge orchestration (scheduled job / immediate
+    /// override), which needs `storage_uri` for an already-hidden dataset in
+    /// order to reclaim its S3 object.
+    async fn get_dataset_any(&self, id: Uuid) -> Result<DatasetRecord, CatalogError>;
+
+    /// Physically remove a soft-deleted dataset's catalog rows (Postgres +
+    /// DuckLake) and mark its tombstone `purged_at`. Does **not** delete the
+    /// S3 object — the caller does that (via `get_dataset_any`'s
+    /// `storage_uri`) before calling this, since object storage access isn't
+    /// a catalog-crate concern. Idempotent: safe to call again on a dataset
+    /// that's already fully purged.
+    async fn purge_dataset(&self, dataset_id: Uuid) -> Result<(), CatalogError>;
 }
 
 /// Stub catalog client — returns empty results when Postgres/DuckLake are unavailable.
@@ -231,6 +270,39 @@ impl CatalogClient for StubCatalogClient {
         services.insert(slug, record.clone());
         Ok(record)
     }
+
+    async fn soft_delete_dataset(
+        &self,
+        dataset_id: Uuid,
+        _reason: Option<String>,
+    ) -> Result<DeletionRecord, CatalogError> {
+        self.datasets
+            .lock()
+            .expect("stub datasets lock")
+            .get(&dataset_id)
+            .cloned()
+            .ok_or(CatalogError::NotFound(dataset_id))?;
+        let deleted_at = Utc::now();
+        let purge_eligible_at =
+            deleted_at + chrono::Duration::days(self._config.purge_retention_days as i64);
+        Ok(DeletionRecord {
+            dataset_id,
+            deleted_at,
+            purge_eligible_at,
+        })
+    }
+
+    async fn get_dataset_any(&self, id: Uuid) -> Result<DatasetRecord, CatalogError> {
+        self.get_dataset(id).await
+    }
+
+    async fn purge_dataset(&self, dataset_id: Uuid) -> Result<(), CatalogError> {
+        self.datasets
+            .lock()
+            .expect("stub datasets lock")
+            .remove(&dataset_id);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -264,6 +336,8 @@ mod tests {
             ducklake_data_path: std::env::var("MANTLE_TEST_DUCKLAKE_PATH")
                 .unwrap_or_else(|_| "./target/test-ducklake/".into()),
             geometry_column: "footprint".into(),
+            purge_retention_days: 7,
+            purge_poll_interval_seconds: 3600,
         });
 
         let catalog = PostgresDuckLakeCatalog::connect(config).await.expect("connect");
