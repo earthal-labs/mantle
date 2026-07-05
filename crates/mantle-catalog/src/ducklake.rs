@@ -137,7 +137,7 @@ impl DuckLakeSession {
                     ? AS name,
                     ? AS format,
                     ? AS storage_uri,
-                    ? AS crs,
+                    ?::VARCHAR AS crs,
                     ST_GeomFromText(?) AS {geom_col},
                     ?::DOUBLE AS cloud_cover,
                     ? AS partition_key,
