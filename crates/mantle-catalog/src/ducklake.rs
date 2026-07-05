@@ -239,7 +239,12 @@ impl DuckLakeSession {
     }
 }
 
-/// Configure DuckDB httpfs for MinIO / S3 using the same AWS_* env vars as compose.
+/// Configure DuckDB S3 access for MinIO / S3 using the same AWS_* env vars as compose.
+///
+/// Uses `CREATE SECRET` rather than the legacy `SET s3_*` session variables:
+/// DuckLake's internal data-file registration (`ducklake_add_data_files`) resolves
+/// S3 credentials/endpoint through the secrets manager, not those global variables,
+/// so `SET`-only config left it falling back to default AWS endpoint resolution.
 fn configure_s3_httpfs(conn: &Connection) -> Result<(), CatalogError> {
     let key = std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default();
     let secret = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default();
@@ -250,9 +255,12 @@ fn configure_s3_httpfs(conn: &Connection) -> Result<(), CatalogError> {
 
     let key_sql = key.replace('\'', "''");
     let secret_sql = secret.replace('\'', "''");
-    let mut sql = format!(
-        "SET s3_access_key_id='{key_sql}'; SET s3_secret_access_key='{secret_sql}'; SET s3_url_style='path';"
-    );
+    let mut options = vec![
+        "TYPE S3".to_string(),
+        format!("KEY_ID '{key_sql}'"),
+        format!("SECRET '{secret_sql}'"),
+        "URL_STYLE 'path'".to_string(),
+    ];
 
     if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
         let host = endpoint
@@ -263,21 +271,21 @@ fn configure_s3_httpfs(conn: &Connection) -> Result<(), CatalogError> {
         if !host.is_empty() {
             let host_sql = host.replace('\'', "''");
             let use_ssl = endpoint.starts_with("https://");
-            sql.push_str(&format!(
-                " SET s3_endpoint='{host_sql}'; SET s3_use_ssl={use_ssl};"
-            ));
+            options.push(format!("ENDPOINT '{host_sql}'"));
+            options.push(format!("USE_SSL {use_ssl}"));
         }
     }
 
     if let Ok(region) = std::env::var("AWS_REGION") {
         if !region.is_empty() {
             let region_sql = region.replace('\'', "''");
-            sql.push_str(&format!(" SET s3_region='{region_sql}';"));
+            options.push(format!("REGION '{region_sql}'"));
         }
     }
 
+    let sql = format!("CREATE OR REPLACE SECRET mantle_s3 ({});", options.join(", "));
     conn.execute_batch(&sql).map_err(|e| {
-        CatalogError::Config(format!("configure DuckDB S3/httpfs settings: {e}"))
+        CatalogError::Config(format!("configure DuckDB S3 secret: {e}"))
     })?;
     Ok(())
 }
