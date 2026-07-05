@@ -6,7 +6,7 @@ mod storage;
 
 pub use catalog::FOOTPRINT_INSERTED_CHANNEL;
 
-use crate::prefetch::{fetch_cog_ifd_blob, fetch_zmetadata_blob};
+use crate::prefetch::fetch_zmetadata_blob;
 use crate::storage::{build_object_store, object_path, parse_storage_uri};
 use mantle_cache::{CacheClient, RedisCacheClient};
 use mantle_catalog::{CatalogClient, PostgresDuckLakeCatalog};
@@ -18,7 +18,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -209,12 +209,11 @@ impl CacheWarmer {
         let ttl = self.config.cache.ifd_ttl_seconds;
         match dataset.format.as_str() {
             "cog" => {
-                let (_bucket, s3_key) =
-                    parse_storage_uri(&dataset.storage_uri, &self.config.storage.bucket)?;
-                info!(dataset_id = %dataset.id, s3_key, "warming COG IFD cache");
-                let blob = fetch_cog_ifd_blob(self.store.clone(), &s3_key).await?;
-                self.cache.set_ifd(&s3_key, &blob, ttl).await?;
-                info!(dataset_id = %dataset.id, bytes = blob.len(), "COG IFD cached");
+                // Tile rendering (mantle-raster::cog) reads COGs via oxigdal,
+                // which needs random byte-range access to the whole file, not
+                // a cached IFD-bytes prefix — nothing reads this cache
+                // anymore, so there's nothing useful to pre-warm here.
+                debug!(dataset_id = %dataset.id, "skipping COG IFD cache warm (unused by oxigdal-based rendering)");
             }
             "icechunk" => {
                 let repo_id = dataset.id.to_string();

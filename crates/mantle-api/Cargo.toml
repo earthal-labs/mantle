@@ -12,7 +12,7 @@ mantle-config = { path = "../mantle-config" }
 mantle-catalog = { path = "../mantle-catalog" }
 mantle-cache = { path = "../mantle-cache" }
 mantle-arrow = { path = "../mantle-arrow" }
-mantle-raster = { path = "../mantle-raster", features = ["oxigdal"] }
+mantle-raster = { path = "../mantle-raster" }
 mantle-render-ast = { path = "../mantle-render-ast" }
 mantle-ogc = { path = "../mantle-ogc" }
 uuid = { workspace = true }

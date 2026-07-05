@@ -29,7 +29,7 @@ tokio = { workspace = true }
 mantle-catalog = { path = "../../crates/mantle-catalog" }
 mantle-config = { path = "../../crates/mantle-config" }
 mantle-ingestion = { path = "../../crates/mantle-ingestion" }
-mantle-raster = { path = "../../crates/mantle-raster", features = ["oxigdal"] }
+mantle-raster = { path = "../../crates/mantle-raster" }
 
 [[test]]
 name = "contracts"

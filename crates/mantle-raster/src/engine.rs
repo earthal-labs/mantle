@@ -1,13 +1,11 @@
 //! `OxigdalRasterEngine` — COG tile rendering with cache + catalog integration.
 
-use crate::cog::{get_ifd_blob_read_through, parse_cog_metadata, read_cog_window_f32};
+use crate::cog::render_tile_layer;
 use crate::colormap::{apply_colormap, colormap_from_lut_id, normalize_band, parse_colormap};
 use crate::encode::{encode_empty_tile, encode_tile};
 use crate::mosaic::{mosaic_by_reducer, mosaic_first_valid, TileLayer};
 use crate::storage::{build_object_store, parse_storage_uri};
-use crate::tile_math::{
-    parse_crs, tile_bounds_web_mercator, warp_to_tile, DatasetCrs, GeoTransform, TILE_SIZE,
-};
+use crate::tile_math::{tile_bounds_web_mercator, TILE_SIZE};
 use crate::{RasterEngine, RasterError, TileFormat};
 use async_trait::async_trait;
 use mantle_arrow::{DatasetFormat, DatasetRef, TileRequest};
@@ -24,44 +22,43 @@ use std::sync::Arc;
 use tracing::debug;
 
 /// Production raster engine: COG byte-range reads, Web Mercator warp, mosaic, colormap.
+///
+/// Takes `cache`/`cache_config` for API-compatibility with callers that still
+/// wire up Redis (used elsewhere, e.g. cache-warming) — the oxigdal-based COG
+/// reader in `cog.rs` doesn't consult it today. A metadata-level cache (not
+/// raw IFD bytes) is a possible follow-up; see the plan notes.
 pub struct OxigdalRasterEngine {
     storage: Arc<StorageConfig>,
-    cache: Arc<dyn CacheClient>,
     catalog: Arc<dyn CatalogClient>,
     store: Arc<dyn ObjectStore>,
-    cache_ttl: u64,
 }
 
 impl OxigdalRasterEngine {
     pub fn new(
         storage: Arc<StorageConfig>,
-        cache: Arc<dyn CacheClient>,
+        _cache: Arc<dyn CacheClient>,
         catalog: Arc<dyn CatalogClient>,
-        cache_config: &CacheConfig,
+        _cache_config: &CacheConfig,
     ) -> Result<Self, RasterError> {
         let store = build_object_store(&storage)?;
         Ok(Self {
             storage,
-            cache,
             catalog,
             store,
-            cache_ttl: cache_config.ifd_ttl_seconds,
         })
     }
 
     pub fn with_store(
         storage: Arc<StorageConfig>,
-        cache: Arc<dyn CacheClient>,
+        _cache: Arc<dyn CacheClient>,
         catalog: Arc<dyn CatalogClient>,
         store: Arc<dyn ObjectStore>,
-        cache_ttl: u64,
+        _cache_ttl: u64,
     ) -> Self {
         Self {
             storage,
-            cache,
             catalog,
             store,
-            cache_ttl,
         }
     }
 
@@ -95,91 +92,16 @@ impl OxigdalRasterEngine {
             return Ok(None);
         }
 
-        let (_bucket, s3_key) =
-            parse_storage_uri(&dataset.storage_uri, &self.storage.bucket)?;
+        let _ = band; // band index reserved for multi-band COG reads
+        let (_bucket, s3_key) = parse_storage_uri(&dataset.storage_uri, &self.storage.bucket)?;
 
-        let ifd_blob =
-            get_ifd_blob_read_through(self.cache.as_ref(), self.store.clone(), &s3_key, self.cache_ttl)
-                .await?;
-        let meta = parse_cog_metadata(&ifd_blob)?;
-
-        let crs = match dataset.crs.as_deref() {
-            Some(c) if parse_crs(Some(c)) != DatasetCrs::Unknown => parse_crs(Some(c)),
-            _ => meta.crs,
+        let values = render_tile_layer(self.store.clone(), &s3_key, *tile_bounds).await?;
+        let Some(values) = values else {
+            return Ok(None);
         };
 
-        // Read source window covering the tile in dataset pixel space.
-        let corners = [
-            tile_bounds.min_x,
-            tile_bounds.min_y,
-            tile_bounds.max_x,
-            tile_bounds.max_y,
-        ];
-        let mut col_min = f64::INFINITY;
-        let mut row_min = f64::INFINITY;
-        let mut col_max = f64::NEG_INFINITY;
-        let mut row_max = f64::NEG_INFINITY;
-
-        for &(mx, my) in &[
-            (corners[0], corners[1]),
-            (corners[2], corners[1]),
-            (corners[0], corners[3]),
-            (corners[2], corners[3]),
-        ] {
-            let (wx, wy) = match crs {
-                DatasetCrs::WebMercator => (mx, my),
-                DatasetCrs::Wgs84 => crate::tile_math::mercator_to_wgs84(mx, my),
-                DatasetCrs::Unknown => (mx, my),
-            };
-            let (c, r) = meta.geotransform.world_to_pixel(wx, wy);
-            col_min = col_min.min(c);
-            row_min = row_min.min(r);
-            col_max = col_max.max(c);
-            row_max = row_max.max(r);
-        }
-
-        let col0 = col_min.floor().max(0.0) as u32;
-        let row0 = row_min.floor().max(0.0) as u32;
-        let col1 = col_max.ceil().min(meta.width as f64) as u32;
-        let row1 = row_max.ceil().min(meta.height as f64) as u32;
-
-        if col1 <= col0 || row1 <= row0 {
-            return Ok(None);
-        }
-
-        let _ = band; // band index reserved for multi-band COG reads
-        let window = read_cog_window_f32(
-            self.store.clone(),
-            &s3_key,
-            &meta,
-            col0,
-            row0,
-            col1,
-            row1,
-        )
-        .await?;
-
-        let src_w = col1 - col0;
-        let src_h = row1 - row0;
-        let local_gt = GeoTransform::north_up(
-            meta.geotransform.pixel_to_world(col0 as f64, row0 as f64).0,
-            meta.geotransform.pixel_to_world(col0 as f64, row0 as f64).1,
-            meta.geotransform.pixel_width,
-            meta.geotransform.pixel_height.abs(),
-        );
-
-        let warped = warp_to_tile(
-            &window,
-            src_w,
-            src_h,
-            &local_gt,
-            crs,
-            tile_bounds,
-            TILE_SIZE,
-        );
-
         Ok(Some(TileLayer {
-            values: warped,
+            values,
             width: TILE_SIZE,
             height: TILE_SIZE,
         }))
@@ -323,11 +245,6 @@ impl OxigdalRasterEngine {
         let normalized = normalize_band(values);
         let rgba = apply_colormap(&normalized, &colormap);
         encode_tile(&rgba, TILE_SIZE, TILE_SIZE, format).map_err(RasterError::Encode)
-    }
-
-    #[cfg(feature = "oxigdal")]
-    pub fn oxigdal_version() -> &'static str {
-        oxigdal::version()
     }
 }
 

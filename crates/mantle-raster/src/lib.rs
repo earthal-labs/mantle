@@ -5,6 +5,7 @@ mod colormap;
 mod encode;
 mod engine;
 mod mosaic;
+mod oxigdal_source;
 mod storage;
 mod tile_math;
 
@@ -12,7 +13,7 @@ pub use encode::{encode_empty_tile, encode_tile};
 pub use colormap::{colormap_from_lut_id, apply_colormap, normalize_band, parse_colormap, Colormap, PseudocolorRamp};
 pub use mosaic::{mosaic_by_reducer, mosaic_first_valid, mosaic_mean, TileLayer};
 pub use engine::{OxigdalRasterEngine, StubRasterEngine};
-pub use tile_math::{tile_bounds_web_mercator, GeoTransform, TileBounds, TILE_SIZE};
+pub use tile_math::{tile_bounds_web_mercator, TileBounds, TILE_SIZE};
 
 use async_trait::async_trait;
 use mantle_arrow::{DatasetRef, TileRequest};

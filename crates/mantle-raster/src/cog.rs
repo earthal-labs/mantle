@@ -1,171 +1,199 @@
-//! COG byte-range reads with Redis IFD cache read-through.
-//!
-//! IFD blobs use the same bincode layout as `mantle-worker::prefetch::CogIfdCacheBlob`
-//! (`mantle:ifd:{s3_key}` per AGENTS.md).
+//! COG tile reads via oxigdal — real GeoTIFF/CRS parsing, real reprojection,
+//! and real TIFF decompression, replacing a hand-rolled parser that got all
+//! three wrong (see `oxigdal_source.rs` for why it must run inside
+//! `spawn_blocking`, and the plan notes for the full history).
 
+use crate::oxigdal_source::ObjectStoreDataSource;
 use crate::storage::object_path;
-use crate::tile_math::{DatasetCrs, GeoTransform};
+use crate::tile_math::{bilinear_sample, TileBounds, TILE_SIZE};
 use crate::RasterError;
-use bytes::Bytes;
-use mantle_cache::CacheClient;
-use object_store::path::Path;
-use object_store::{GetOptions, GetRange, ObjectStore};
-use serde::{Deserialize, Serialize};
-use std::ops::Range;
+use object_store::ObjectStore;
+use oxigdal::algorithms::vector::{Coordinate, CrsTransformer};
+use oxigdal::core_types::io::DataSource;
+use oxigdal::core_types::types::RasterDataType;
+use oxigdal::geotiff::GeoTiffReader;
 use std::sync::Arc;
-use tracing::debug;
 
-const INITIAL_HEADER_BYTES: u64 = 16_384;
-
-/// Serialized COG IFD cache entry (contract shared with mantle-worker).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CogIfdCacheBlob {
-    pub segments: Vec<ByteSegment>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ByteSegment {
-    pub offset: u64,
-    pub data: Vec<u8>,
-}
-
-/// Parsed GeoTIFF metadata from cached IFD bytes.
-#[derive(Debug, Clone)]
-pub struct CogMetadata {
-    pub width: u32,
-    pub height: u32,
-    pub bits_per_sample: u16,
-    pub samples_per_pixel: u16,
-    pub geotransform: GeoTransform,
-    pub crs: DatasetCrs,
-    pub strip_offsets: Vec<u64>,
-    pub strip_byte_counts: Vec<u64>,
-    pub tile_width: Option<u32>,
-    pub tile_height: Option<u32>,
-    pub tile_offsets: Vec<u64>,
-    pub tile_byte_counts: Vec<u64>,
-    pub little_endian: bool,
-}
-
-/// Read-through IFD fetch: Redis → S3 header planning → cache populate.
-pub async fn get_ifd_blob_read_through<C: CacheClient + ?Sized>(
-    cache: &C,
+/// Fetch, reproject, and resample a dataset's pixels onto a `TILE_SIZE` x
+/// `TILE_SIZE` Web Mercator grid covering `tile_bounds`. Returns `None` when
+/// the source has no usable georeferencing (unknown CRS/geotransform) or the
+/// tile doesn't overlap the source's pixel extent at all.
+pub async fn render_tile_layer(
     store: Arc<dyn ObjectStore>,
     s3_key: &str,
-    ttl_seconds: u64,
-) -> Result<Vec<u8>, RasterError> {
-    if let Some(cached) = cache.get_ifd(s3_key).await? {
-        return Ok(cached);
-    }
-    let blob = fetch_cog_ifd_blob(store, s3_key).await?;
-    cache.set_ifd(s3_key, &blob, ttl_seconds).await?;
-    Ok(blob)
-}
-
-pub async fn fetch_cog_ifd_blob(
-    store: Arc<dyn ObjectStore>,
-    s3_key: &str,
-) -> Result<Vec<u8>, RasterError> {
+    tile_bounds: TileBounds,
+) -> Result<Option<Vec<f32>>, RasterError> {
     let path = object_path(s3_key);
-    let header = get_range(&store, &path, 0..INITIAL_HEADER_BYTES).await?;
-    let ranges = plan_ifd_ranges(&header)?;
-    debug!(s3_key, segments = ranges.len(), "planned COG IFD byte ranges");
+    let source = ObjectStoreDataSource::open(store, path)
+        .await
+        .map_err(|e| RasterError::Cog(format!("head object {s3_key}: {e}")))?;
 
-    let mut segments = Vec::with_capacity(ranges.len());
-    for range in ranges {
-        let data = if range.start == 0 && range.end <= header.len() as u64 {
-            header[range.start as usize..range.end as usize].to_vec()
-        } else {
-            get_range(&store, &path, range.clone()).await?.to_vec()
+    tokio::task::spawn_blocking(move || read_and_warp(source, tile_bounds))
+        .await
+        .map_err(|e| RasterError::Cog(format!("blocking task join: {e}")))?
+}
+
+fn read_and_warp(
+    source: ObjectStoreDataSource,
+    tile_bounds: TileBounds,
+) -> Result<Option<Vec<f32>>, RasterError> {
+    let reader = GeoTiffReader::open(source)
+        .map_err(|e| RasterError::Cog(format!("open geotiff: {e}")))?;
+
+    let Some(geo_transform) = reader.geo_transform() else {
+        return Ok(None);
+    };
+
+    let Some(epsg) = reader.epsg_code() else {
+        return Ok(None);
+    };
+
+    let transformer = CrsTransformer::new("EPSG:3857", format!("EPSG:{epsg}"))
+        .map_err(|e| RasterError::Cog(format!("build crs transformer: {e}")))?;
+
+    let width = reader.width() as u32;
+    let height = reader.height() as u32;
+
+    // Corners of the requested Web Mercator tile, reprojected into the
+    // source's native CRS and then into its pixel space, to find the
+    // source pixel window that covers this tile.
+    let corners = [
+        (tile_bounds.min_x, tile_bounds.min_y),
+        (tile_bounds.max_x, tile_bounds.min_y),
+        (tile_bounds.min_x, tile_bounds.max_y),
+        (tile_bounds.max_x, tile_bounds.max_y),
+    ];
+    let mut col_min = f64::INFINITY;
+    let mut row_min = f64::INFINITY;
+    let mut col_max = f64::NEG_INFINITY;
+    let mut row_max = f64::NEG_INFINITY;
+
+    for (mx, my) in corners {
+        let Ok(native) = transformer.transform_coordinate(&Coordinate::new_2d(mx, my)) else {
+            continue;
         };
-        segments.push(ByteSegment {
-            offset: range.start,
-            data,
-        });
+        let Ok((col, row)) = geo_transform.world_to_pixel(native.x, native.y) else {
+            continue;
+        };
+        col_min = col_min.min(col);
+        row_min = row_min.min(row);
+        col_max = col_max.max(col);
+        row_max = row_max.max(row);
     }
 
-    bincode::serialize(&CogIfdCacheBlob { segments })
-        .map_err(|e| RasterError::Cog(format!("serialize IFD blob: {e}")))
+    let col0 = col_min.floor().max(0.0) as u32;
+    let row0 = row_min.floor().max(0.0) as u32;
+    let col1 = (col_max.ceil().max(0.0) as u32).min(width);
+    let row1 = (row_max.ceil().max(0.0) as u32).min(height);
+
+    if col1 <= col0 || row1 <= row0 {
+        return Ok(None);
+    }
+
+    let data_type = reader.data_type().unwrap_or(RasterDataType::UInt8);
+    let band_count = reader.band_count().max(1);
+    let window = read_window(&reader, col0, row0, col1, row1, data_type, band_count)?;
+    let src_w = col1 - col0;
+    let src_h = row1 - row0;
+
+    // Resample the extracted window onto the output tile grid, reusing the
+    // same transformer for every pixel rather than rebuilding it.
+    let mut out = vec![f32::NAN; (TILE_SIZE * TILE_SIZE) as usize];
+    let dx = tile_bounds.width() / TILE_SIZE as f64;
+    let dy = tile_bounds.height() / TILE_SIZE as f64;
+
+    for py in 0..TILE_SIZE {
+        for px in 0..TILE_SIZE {
+            let mx = tile_bounds.min_x + (px as f64 + 0.5) * dx;
+            let my = tile_bounds.max_y - (py as f64 + 0.5) * dy;
+
+            let Ok(native) = transformer.transform_coordinate(&Coordinate::new_2d(mx, my)) else {
+                continue;
+            };
+            let Ok((col, row)) = geo_transform.world_to_pixel(native.x, native.y) else {
+                continue;
+            };
+
+            let local_col = col - col0 as f64;
+            let local_row = row - row0 as f64;
+            if local_col >= 0.0
+                && local_row >= 0.0
+                && local_col < src_w as f64
+                && local_row < src_h as f64
+            {
+                out[(py * TILE_SIZE + px) as usize] =
+                    bilinear_sample(&window, src_w, src_h, local_col, local_row);
+            }
+        }
+    }
+
+    Ok(Some(out))
 }
 
-pub fn parse_cog_metadata(blob_bytes: &[u8]) -> Result<CogMetadata, RasterError> {
-    let blob: CogIfdCacheBlob = bincode::deserialize(blob_bytes)
-        .map_err(|e| RasterError::Cog(format!("deserialize IFD blob: {e}")))?;
-    let map = SegmentMap::new(blob.segments);
-    parse_tiff_metadata(&map)
-}
-
-/// Read a raster window as `f32` samples (band 0 / first sample).
-pub async fn read_cog_window_f32(
-    store: Arc<dyn ObjectStore>,
-    s3_key: &str,
-    meta: &CogMetadata,
+/// Assembles a pixel window from oxigdal's whole-tile reads (no windowed
+/// read exists upstream — see the plan notes). `read_tile` already handles
+/// TIFF decompression and predictor reversal; this only has to decode raw
+/// samples and crop tiles to the requested window.
+fn read_window<S: DataSource>(
+    reader: &GeoTiffReader<S>,
     col0: u32,
     row0: u32,
     col1: u32,
     row1: u32,
+    data_type: RasterDataType,
+    band_count: u32,
 ) -> Result<Vec<f32>, RasterError> {
-    let width = col1.saturating_sub(col0);
-    let height = row1.saturating_sub(row0);
-    if width == 0 || height == 0 {
-        return Ok(Vec::new());
+    let out_w = col1 - col0;
+    let out_h = row1 - row0;
+    let mut out = vec![f32::NAN; (out_w * out_h) as usize];
+
+    let width = reader.width() as u32;
+    let height = reader.height() as u32;
+    let (tiles_across, tiles_down) = reader.tile_count();
+    let (tile_w, tile_h) = reader
+        .tile_size()
+        .unwrap_or((width, height.div_ceil(tiles_down.max(1))));
+
+    if tile_w == 0 || tile_h == 0 || tiles_across == 0 || tiles_down == 0 {
+        return Ok(out);
     }
 
-    let path = object_path(s3_key);
-    let mut out = vec![f32::NAN; (width * height) as usize];
+    let tx0 = col0 / tile_w;
+    let tx1 = ((col1 - 1) / tile_w).min(tiles_across - 1);
+    let ty0 = row0 / tile_h;
+    let ty1 = ((row1 - 1) / tile_h).min(tiles_down - 1);
 
-    if !meta.tile_offsets.is_empty() {
-        let tw = meta.tile_width.unwrap_or(256);
-        let th = meta.tile_height.unwrap_or(256);
-        let tiles_across = meta.width.div_ceil(tw);
+    for ty in ty0..=ty1 {
+        for tx in tx0..=tx1 {
+            let tile_bytes = reader
+                .read_tile(0, tx, ty)
+                .map_err(|e| RasterError::Cog(format!("read tile ({tx},{ty}): {e}")))?;
 
-        for row in row0..row1 {
-            for col in col0..col1 {
-                let tile_col = col / tw;
-                let tile_row = row / th;
-                let tile_idx = tile_row * tiles_across + tile_col;
-                let tile_offset = *meta
-                    .tile_offsets
-                    .get(tile_idx as usize)
-                    .ok_or_else(|| RasterError::Cog("tile offset out of range".into()))?;
-                let tile_bytes = *meta
-                    .tile_byte_counts
-                    .get(tile_idx as usize)
-                    .unwrap_or(&0);
-                if tile_bytes == 0 {
-                    continue;
-                }
+            let tile_x0 = tx * tile_w;
+            let tile_y0 = ty * tile_h;
+            let this_tile_w = tile_w.min(width - tile_x0);
+            let this_tile_h = tile_h.min(height - tile_y0);
 
-                let data = get_range(&store, &path, tile_offset..tile_offset + tile_bytes).await?;
-                let local_col = col % tw;
-                let local_row = row % th;
-                if let Some(v) = decode_sample(
-                    &data,
-                    meta,
-                    local_col,
-                    local_row,
-                    tw,
-                    th,
-                ) {
-                    out[((row - row0) * width + (col - col0)) as usize] = v;
-                }
-            }
-        }
-    } else {
-        for (strip_idx, (&offset, &byte_count)) in meta
-            .strip_offsets
-            .iter()
-            .zip(meta.strip_byte_counts.iter())
-            .enumerate()
-        {
-            let strip_row = strip_idx as u32;
-            if strip_row < row0 || strip_row >= row1 || byte_count == 0 {
-                continue;
-            }
-            let data = get_range(&store, &path, offset..offset + byte_count).await?;
-            for col in col0..col1 {
-                if let Some(v) = decode_sample(&data, meta, col - col0, 0, width, 1) {
-                    out[((strip_row - row0) * width + (col - col0)) as usize] = v;
+            let row_lo = row0.max(tile_y0);
+            let row_hi = row1.min(tile_y0 + this_tile_h);
+            let col_lo = col0.max(tile_x0);
+            let col_hi = col1.min(tile_x0 + this_tile_w);
+
+            for global_row in row_lo..row_hi {
+                let local_row = global_row - tile_y0;
+                for global_col in col_lo..col_hi {
+                    let local_col = global_col - tile_x0;
+                    if let Some(v) = decode_sample(
+                        &tile_bytes,
+                        data_type,
+                        band_count,
+                        local_col,
+                        local_row,
+                        tile_w,
+                    ) {
+                        let out_idx = ((global_row - row0) * out_w + (global_col - col0)) as usize;
+                        out[out_idx] = v;
+                    }
                 }
             }
         }
@@ -174,404 +202,59 @@ pub async fn read_cog_window_f32(
     Ok(out)
 }
 
+/// Decodes band 0 of a single sample from an already-decompressed tile
+/// buffer. Assumes little-endian byte order (the overwhelming common case
+/// for modern-generated COGs); `GeoTiffReader`'s public API doesn't expose
+/// the source file's byte order to check otherwise.
 fn decode_sample(
     data: &[u8],
-    meta: &CogMetadata,
+    data_type: RasterDataType,
+    band_count: u32,
     col: u32,
     row: u32,
-    width: u32,
-    _height: u32,
+    stride_w: u32,
 ) -> Option<f32> {
-    let spp = meta.samples_per_pixel.max(1) as usize;
-    let bps = meta.bits_per_sample.max(8) as usize;
-    let pixel_stride = (bps / 8).max(1) * spp;
-    let idx = ((row * width + col) as usize) * pixel_stride;
-    if idx + pixel_stride > data.len() {
+    let sample_bytes = data_type.size_bytes();
+    let pixel_stride = sample_bytes * band_count as usize;
+    let idx = ((row * stride_w + col) as usize) * pixel_stride;
+    if idx + sample_bytes > data.len() {
         return None;
     }
-    match bps {
-        8 => Some(data[idx] as f32),
-        16 => {
-            let raw = if meta.little_endian {
-                u16::from_le_bytes([data[idx], data[idx + 1]])
-            } else {
-                u16::from_be_bytes([data[idx], data[idx + 1]])
-            };
-            Some(raw as f32)
-        }
-        32 => {
-            let raw = if meta.little_endian {
-                f32::from_le_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]])
-            } else {
-                f32::from_be_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]])
-            };
-            Some(raw)
-        }
-        _ => None,
-    }
-}
 
-struct SegmentMap {
-    segments: Vec<ByteSegment>,
-}
-
-impl SegmentMap {
-    fn new(segments: Vec<ByteSegment>) -> Self {
-        Self { segments }
-    }
-
-    fn read(&self, offset: u64, len: usize) -> Option<Vec<u8>> {
-        let mut out = vec![0u8; len];
-        let mut remaining = len;
-        let mut cursor = offset;
-        let mut written = 0usize;
-
-        while remaining > 0 {
-            let seg = self.segments.iter().find(|s| {
-                cursor >= s.offset && cursor < s.offset + s.data.len() as u64
-            })?;
-            let local = (cursor - seg.offset) as usize;
-            let take = remaining.min(seg.data.len() - local);
-            out[written..written + take].copy_from_slice(&seg.data[local..local + take]);
-            written += take;
-            remaining -= take;
-            cursor += take as u64;
-        }
-        Some(out)
-    }
-}
-
-fn parse_tiff_metadata(map: &SegmentMap) -> Result<CogMetadata, RasterError> {
-    let header = map.read(0, 8).ok_or_else(|| RasterError::Cog("missing TIFF header".into()))?;
-    let le = match &header[0..2] {
-        b"II" => true,
-        b"MM" => false,
-        _ => return Err(RasterError::Cog("invalid TIFF byte order".into())),
-    };
-    if read_u16(&header, 2, le)? != 42 {
-        return Err(RasterError::Cog("invalid TIFF magic".into()));
-    }
-
-    let ifd_offset = read_u32(&header, 4, le)? as u64;
-    let mut tags = read_ifd_tags(map, ifd_offset, le)?;
-
-    let width = tags.remove(&256).and_then(tag_u32).unwrap_or(0);
-    let height = tags.remove(&257).and_then(tag_u32).unwrap_or(0);
-    let bits_per_sample = tags
-        .remove(&258)
-        .and_then(tag_u16)
-        .unwrap_or(8);
-    let samples_per_pixel = tags.remove(&277).and_then(tag_u16).unwrap_or(1);
-
-    let strip_offsets = tags
-        .remove(&273)
-        .map(|t| tag_u64_list(map, &t, le))
-        .transpose()?
-        .unwrap_or_default();
-    let strip_byte_counts = tags
-        .remove(&279)
-        .map(|t| tag_u64_list(map, &t, le))
-        .transpose()?
-        .unwrap_or_default();
-    let tile_width = tags.remove(&322).and_then(tag_u32);
-    let tile_height = tags.remove(&323).and_then(tag_u32);
-    let tile_offsets = tags
-        .remove(&324)
-        .map(|t| tag_u64_list(map, &t, le))
-        .transpose()?
-        .unwrap_or_default();
-    let tile_byte_counts = tags
-        .remove(&325)
-        .map(|t| tag_u64_list(map, &t, le))
-        .transpose()?
-        .unwrap_or_default();
-
-    let geotransform = geotransform_from_tags(map, &mut tags, le, width, height)?;
-    let crs = crs_from_tags(&tags);
-
-    Ok(CogMetadata {
-        width,
-        height,
-        bits_per_sample,
-        samples_per_pixel,
-        geotransform,
-        crs,
-        strip_offsets,
-        strip_byte_counts,
-        tile_width,
-        tile_height,
-        tile_offsets,
-        tile_byte_counts,
-        little_endian: le,
-    })
-}
-
-#[derive(Debug, Clone)]
-struct IfdTag {
-    tag_type: u16,
-    count: u32,
-    value_offset: u64,
-}
-
-fn read_ifd_tags(
-    map: &SegmentMap,
-    ifd_offset: u64,
-    le: bool,
-) -> Result<std::collections::HashMap<u16, IfdTag>, RasterError> {
-    let entry_count = read_u16_at(map, ifd_offset, le)? as usize;
-    let mut tags = std::collections::HashMap::new();
-    for i in 0..entry_count {
-        let base = ifd_offset + 2 + (i as u64 * 12);
-        let tag_id = read_u16_at(map, base, le)?;
-        let tag_type = read_u16_at(map, base + 2, le)?;
-        let count = read_u32_at(map, base + 4, le)?;
-        let value_offset = read_u32_at(map, base + 8, le)? as u64;
-        tags.insert(
-            tag_id,
-            IfdTag {
-                tag_type,
-                count,
-                value_offset,
-            },
-        );
-    }
-    Ok(tags)
-}
-
-fn geotransform_from_tags(
-    map: &SegmentMap,
-    tags: &mut std::collections::HashMap<u16, IfdTag>,
-    le: bool,
-    width: u32,
-    height: u32,
-) -> Result<GeoTransform, RasterError> {
-    if let Some(scale_tag) = tags.remove(&33550) {
-        let tie_tag = tags.remove(&33922);
-        let scales = read_rational_list(map, &scale_tag, le)?;
-        let tie = tie_tag
-            .as_ref()
-            .map(|t| read_f64_list(map, t, le))
-            .transpose()?
-            .unwrap_or_else(|| vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-
-        let pixel_w = scales.first().copied().unwrap_or(1.0);
-        let pixel_h = scales.get(1).copied().unwrap_or(1.0);
-        let origin_x = tie.get(3).copied().unwrap_or(0.0);
-        let origin_y = tie.get(4).copied().unwrap_or(0.0);
-        return Ok(GeoTransform::north_up(origin_x, origin_y, pixel_w, pixel_h));
-    }
-
-    // Fallback: unit pixel grid when geo tags are absent.
-    let _ = (map, le, tags, width);
-    Ok(GeoTransform::north_up(0.0, height as f64, 1.0, 1.0))
-}
-
-fn crs_from_tags(tags: &std::collections::HashMap<u16, IfdTag>) -> DatasetCrs {
-    if let Some(tag) = tags.get(&34737) {
-        if tag.count > 0 {
-            // ASCII params — best-effort scan deferred; use GeoKey directory when present.
-        }
-    }
-    if let Some(tag) = tags.get(&34735) {
-        if tag.count >= 4 {
-            return DatasetCrs::Wgs84;
-        }
-    }
-    DatasetCrs::Unknown
-}
-
-fn tag_u16(tag: IfdTag) -> Option<u16> {
-    if tag.count >= 1 && tag.tag_type == 3 {
-        Some(tag.value_offset as u16)
-    } else {
-        None
-    }
-}
-
-fn tag_u32(tag: IfdTag) -> Option<u32> {
-    if tag.count >= 1 && tag.tag_type == 4 {
-        Some(tag.value_offset as u32)
-    } else {
-        None
-    }
-}
-
-fn tag_u64_list(map: &SegmentMap, tag: &IfdTag, le: bool) -> Result<Vec<u64>, RasterError> {
-    match tag.tag_type {
-        3 if tag.count == 1 => Ok(vec![tag.value_offset]),
-        4 if tag.count == 1 => Ok(vec![tag.value_offset]),
-        4 => {
-            let bytes = map
-                .read(tag.value_offset, (tag.count * 4) as usize)
-                .ok_or_else(|| RasterError::Cog("cannot read tag values".into()))?;
-            let mut out = Vec::with_capacity(tag.count as usize);
-            for i in 0..tag.count as usize {
-                out.push(read_u32(&bytes, (i * 4) as u64, le)? as u64);
-            }
-            Ok(out)
-        }
-        _ => Ok(vec![tag.value_offset]),
-    }
-}
-
-fn read_f64_list(map: &SegmentMap, tag: &IfdTag, le: bool) -> Result<Vec<f64>, RasterError> {
-    let bytes = map
-        .read(tag.value_offset, (tag.count * 8) as usize)
-        .ok_or_else(|| RasterError::Cog("cannot read f64 tag".into()))?;
-    let mut out = Vec::with_capacity(tag.count as usize);
-    for i in 0..tag.count as usize {
-        let start = i * 8;
-        let chunk: [u8; 8] = bytes[start..start + 8].try_into().unwrap();
-        out.push(if le {
-            f64::from_le_bytes(chunk)
-        } else {
-            f64::from_be_bytes(chunk)
-        });
-    }
-    Ok(out)
-}
-
-fn read_rational_list(map: &SegmentMap, tag: &IfdTag, le: bool) -> Result<Vec<f64>, RasterError> {
-    let bytes = map
-        .read(tag.value_offset, (tag.count * 8) as usize)
-        .ok_or_else(|| RasterError::Cog("cannot read rational tag".into()))?;
-    let mut out = Vec::with_capacity(tag.count as usize);
-    for i in 0..tag.count as usize {
-        let start = i * 8;
-        let num = if le {
-            u32::from_le_bytes(bytes[start..start + 4].try_into().unwrap())
-        } else {
-            u32::from_be_bytes(bytes[start..start + 4].try_into().unwrap())
-        };
-        let den = if le {
-            u32::from_le_bytes(bytes[start + 4..start + 8].try_into().unwrap())
-        } else {
-            u32::from_be_bytes(bytes[start + 4..start + 8].try_into().unwrap())
-        };
-        out.push(if den == 0 {
-            0.0
-        } else {
-            num as f64 / den as f64
-        });
-    }
-    Ok(out)
-}
-
-async fn get_range(
-    store: &dyn ObjectStore,
-    path: &Path,
-    range: Range<u64>,
-) -> Result<Bytes, RasterError> {
-    let start = usize::try_from(range.start)
-        .map_err(|_| RasterError::Cog("range start overflow".into()))?;
-    let end = usize::try_from(range.end)
-        .map_err(|_| RasterError::Cog("range end overflow".into()))?;
-    let opts = GetOptions {
-        range: Some(GetRange::Bounded(start..end)),
-        ..Default::default()
-    };
-    let bytes = store
-        .get_opts(path, opts)
-        .await
-        .map_err(|e| RasterError::Cog(format!("range read: {e}")))?
-        .bytes()
-        .await
-        .map_err(|e| RasterError::Cog(format!("range bytes: {e}")))?;
-    Ok(bytes)
-}
-
-fn plan_ifd_ranges(header: &[u8]) -> Result<Vec<Range<u64>>, RasterError> {
-    if header.len() < 8 {
-        return Err(RasterError::Cog("TIFF header too short".into()));
-    }
-    let le = match &header[0..2] {
-        b"II" => true,
-        b"MM" => false,
-        _ => return Err(RasterError::Cog("invalid TIFF byte order marker".into())),
-    };
-    if read_u16(header, 2, le)? != 42 {
-        return Err(RasterError::Cog("invalid TIFF magic".into()));
-    }
-
-    let mut ranges = vec![0..INITIAL_HEADER_BYTES.min(header.len() as u64)];
-    let mut next_ifd = read_u32(header, 4, le)? as u64;
-
-    while next_ifd != 0 {
-        if next_ifd + 2 > header.len() as u64 {
-            ranges.push(next_ifd..next_ifd + 2);
-        }
-        let entry_count = if next_ifd + 2 <= header.len() as u64 {
-            read_u16(header, next_ifd, le)? as u64
-        } else {
-            0
-        };
-        let ifd_len = 2 + entry_count * 12 + 4;
-        ranges.push(next_ifd..next_ifd + ifd_len);
-        let next_ptr_offset = next_ifd + 2 + entry_count * 12;
-        if next_ptr_offset + 4 <= header.len() as u64 {
-            next_ifd = read_u32(header, next_ptr_offset, le)? as u64;
-        } else {
-            ranges.push(next_ptr_offset..next_ptr_offset + 4);
-            break;
-        }
-    }
-    Ok(merge_ranges(ranges))
-}
-
-fn merge_ranges(mut ranges: Vec<Range<u64>>) -> Vec<Range<u64>> {
-    if ranges.is_empty() {
-        return ranges;
-    }
-    ranges.sort_by_key(|r| r.start);
-    let mut merged = Vec::new();
-    let mut current = ranges[0].clone();
-    for range in ranges.into_iter().skip(1) {
-        if range.start <= current.end {
-            current.end = current.end.max(range.end);
-        } else {
-            merged.push(current);
-            current = range;
-        }
-    }
-    merged.push(current);
-    merged
-}
-
-fn read_u16_at(map: &SegmentMap, offset: u64, le: bool) -> Result<u16, RasterError> {
-    let buf = map
-        .read(offset, 2)
-        .ok_or_else(|| RasterError::Cog(format!("read u16 at {offset}")))?;
-    read_u16(&buf, 0, le)
-}
-
-fn read_u32_at(map: &SegmentMap, offset: u64, le: bool) -> Result<u32, RasterError> {
-    let buf = map
-        .read(offset, 4)
-        .ok_or_else(|| RasterError::Cog(format!("read u32 at {offset}")))?;
-    read_u32(&buf, 0, le)
-}
-
-fn read_u16(buf: &[u8], offset: u64, le: bool) -> Result<u16, RasterError> {
-    let start = offset as usize;
-    if start + 2 > buf.len() {
-        return Err(RasterError::Cog(format!("read u16 out of bounds at {offset}")));
-    }
-    Ok(if le {
-        u16::from_le_bytes([buf[start], buf[start + 1]])
-    } else {
-        u16::from_be_bytes([buf[start], buf[start + 1]])
-    })
-}
-
-fn read_u32(buf: &[u8], offset: u64, le: bool) -> Result<u32, RasterError> {
-    let start = offset as usize;
-    if start + 4 > buf.len() {
-        return Err(RasterError::Cog(format!("read u32 out of bounds at {offset}")));
-    }
-    Ok(if le {
-        u32::from_le_bytes([buf[start], buf[start + 1], buf[start + 2], buf[start + 3]])
-    } else {
-        u32::from_be_bytes([buf[start], buf[start + 1], buf[start + 2], buf[start + 3]])
+    Some(match data_type {
+        RasterDataType::UInt8 => data[idx] as f32,
+        RasterDataType::Int8 => data[idx] as i8 as f32,
+        RasterDataType::UInt16 => u16::from_le_bytes([data[idx], data[idx + 1]]) as f32,
+        RasterDataType::Int16 => i16::from_le_bytes([data[idx], data[idx + 1]]) as f32,
+        RasterDataType::UInt32 => u32::from_le_bytes([
+            data[idx],
+            data[idx + 1],
+            data[idx + 2],
+            data[idx + 3],
+        ]) as f32,
+        RasterDataType::Int32 => i32::from_le_bytes([
+            data[idx],
+            data[idx + 1],
+            data[idx + 2],
+            data[idx + 3],
+        ]) as f32,
+        RasterDataType::Float32 => f32::from_le_bytes([
+            data[idx],
+            data[idx + 1],
+            data[idx + 2],
+            data[idx + 3],
+        ]),
+        RasterDataType::Float64 => f64::from_le_bytes([
+            data[idx],
+            data[idx + 1],
+            data[idx + 2],
+            data[idx + 3],
+            data[idx + 4],
+            data[idx + 5],
+            data[idx + 6],
+            data[idx + 7],
+        ]) as f32,
+        _ => return None,
     })
 }
 
@@ -580,21 +263,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plan_ifd_ranges_for_minimal_little_endian_tiff() {
-        let mut header = vec![0u8; 64];
-        header[0..2].copy_from_slice(b"II");
-        header[2..4].copy_from_slice(&42u16.to_le_bytes());
-        header[4..8].copy_from_slice(&8u32.to_le_bytes());
-        header[8..10].copy_from_slice(&0u16.to_le_bytes());
-        header[10..14].copy_from_slice(&0u32.to_le_bytes());
-
-        let ranges = plan_ifd_ranges(&header).expect("plan ranges");
-        assert!(ranges.iter().any(|r| r.start <= 8 && r.end > 8));
+    fn decode_sample_uint8_single_band() {
+        let data = vec![10u8, 20, 30, 40];
+        assert_eq!(decode_sample(&data, RasterDataType::UInt8, 1, 0, 0, 2), Some(10.0));
+        assert_eq!(decode_sample(&data, RasterDataType::UInt8, 1, 1, 0, 2), Some(20.0));
+        assert_eq!(decode_sample(&data, RasterDataType::UInt8, 1, 0, 1, 2), Some(30.0));
     }
 
     #[test]
-    fn merge_ranges_coalesces_overlapping() {
-        let merged = merge_ranges(vec![0..10, 8..20, 30..40]);
-        assert_eq!(merged, vec![0..20, 30..40]);
+    fn decode_sample_uint16_little_endian() {
+        // Two pixels: 300, 1000 (little-endian u16)
+        let data = [300u16.to_le_bytes(), 1000u16.to_le_bytes()].concat();
+        assert_eq!(decode_sample(&data, RasterDataType::UInt16, 1, 0, 0, 2), Some(300.0));
+        assert_eq!(decode_sample(&data, RasterDataType::UInt16, 1, 1, 0, 2), Some(1000.0));
+    }
+
+    #[test]
+    fn decode_sample_float32() {
+        let data = 1.5f32.to_le_bytes().to_vec();
+        assert_eq!(decode_sample(&data, RasterDataType::Float32, 1, 0, 0, 1), Some(1.5));
+    }
+
+    #[test]
+    fn decode_sample_multiband_reads_first_band_only() {
+        // 2 pixels, 3 bands (RGB) each u8: pixel0=(1,2,3), pixel1=(4,5,6)
+        let data = vec![1u8, 2, 3, 4, 5, 6];
+        assert_eq!(decode_sample(&data, RasterDataType::UInt8, 3, 0, 0, 2), Some(1.0));
+        assert_eq!(decode_sample(&data, RasterDataType::UInt8, 3, 1, 0, 2), Some(4.0));
+    }
+
+    #[test]
+    fn decode_sample_out_of_bounds_returns_none() {
+        let data = vec![1u8, 2, 3, 4];
+        assert_eq!(decode_sample(&data, RasterDataType::UInt8, 1, 10, 10, 2), None);
+    }
+
+    #[test]
+    fn crs_transformer_web_mercator_to_utm_matches_direct_wgs84_path() {
+        // Sanity check that the CrsTransformer path used by read_and_warp
+        // actually resolves an arbitrary EPSG pair (UTM), not just the
+        // WGS84<->Web Mercator pair the old DatasetCrs enum supported.
+        let to_utm = CrsTransformer::new("EPSG:3857", "EPSG:32633")
+            .expect("web mercator -> UTM zone 33N transformer must construct");
+        let origin = Coordinate::new_2d(0.0, 0.0);
+        let result = to_utm
+            .transform_coordinate(&origin)
+            .expect("transform must succeed for a real UTM zone");
+        assert!(result.x.is_finite() && result.y.is_finite());
     }
 }

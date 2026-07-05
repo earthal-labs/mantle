@@ -21,11 +21,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 geo-types = { workspace = true }
 tracing = "0.1"
-oxigdal = { version = "0.1", features = ["geotiff", "cloud", "algorithms"], optional = true }
-
-[features]
-default = ["oxigdal"]
-oxigdal = ["dep:oxigdal"]
+oxigdal = { version = "0.1", features = ["geotiff", "algorithms"] }
+oxigdal-algorithms = { version = "0.1.6", features = ["crs-transform"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
