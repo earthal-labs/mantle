@@ -13,6 +13,7 @@ use oxigdal::core_types::io::DataSource;
 use oxigdal::core_types::types::RasterDataType;
 use oxigdal::geotiff::GeoTiffReader;
 use std::sync::Arc;
+use tracing::warn;
 
 /// Fetch, reproject, and resample a dataset's pixels onto a `TILE_SIZE` x
 /// `TILE_SIZE` Web Mercator grid covering `tile_bounds`. Returns `None` when
@@ -40,19 +41,26 @@ fn read_and_warp(
     let reader = GeoTiffReader::open(source)
         .map_err(|e| RasterError::Cog(format!("open geotiff: {e}")))?;
 
+    let width = reader.width() as u32;
+    let height = reader.height() as u32;
+
     let Some(geo_transform) = reader.geo_transform() else {
+        warn!(width, height, "cog: no geo_transform detected; cannot place tile");
         return Ok(None);
     };
 
     let Some(epsg) = reader.epsg_code() else {
+        warn!(
+            width,
+            height,
+            ?geo_transform,
+            "cog: no EPSG code detected; cannot reproject tile"
+        );
         return Ok(None);
     };
 
     let transformer = CrsTransformer::new("EPSG:3857", format!("EPSG:{epsg}"))
         .map_err(|e| RasterError::Cog(format!("build crs transformer: {e}")))?;
-
-    let width = reader.width() as u32;
-    let height = reader.height() as u32;
 
     // Corners of the requested Web Mercator tile, reprojected into the
     // source's native CRS and then into its pixel space, to find the
@@ -69,11 +77,24 @@ fn read_and_warp(
     let mut row_max = f64::NEG_INFINITY;
 
     for (mx, my) in corners {
-        let Ok(native) = transformer.transform_coordinate(&Coordinate::new_2d(mx, my)) else {
-            continue;
+        let native = match transformer.transform_coordinate(&Coordinate::new_2d(mx, my)) {
+            Ok(n) => n,
+            Err(e) => {
+                warn!(mx, my, epsg, error = %e, "cog: corner reprojection failed");
+                continue;
+            }
         };
-        let Ok((col, row)) = geo_transform.world_to_pixel(native.x, native.y) else {
-            continue;
+        let (col, row) = match geo_transform.world_to_pixel(native.x, native.y) {
+            Ok(cr) => cr,
+            Err(e) => {
+                warn!(
+                    native_x = native.x,
+                    native_y = native.y,
+                    error = %e,
+                    "cog: world_to_pixel failed for reprojected corner"
+                );
+                continue;
+            }
         };
         col_min = col_min.min(col);
         row_min = row_min.min(row);
@@ -87,6 +108,20 @@ fn read_and_warp(
     let row1 = (row_max.ceil().max(0.0) as u32).min(height);
 
     if col1 <= col0 || row1 <= row0 {
+        warn!(
+            col0,
+            row0,
+            col1,
+            row1,
+            width,
+            height,
+            col_min,
+            row_min,
+            col_max,
+            row_max,
+            epsg,
+            "cog: computed source window is empty/degenerate for this tile"
+        );
         return Ok(None);
     }
 
