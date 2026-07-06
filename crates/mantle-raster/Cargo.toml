@@ -23,6 +23,9 @@ geo-types = { workspace = true }
 tracing = "0.1"
 oxigdal = { version = "0.1", features = ["geotiff", "algorithms"] }
 oxigdal-algorithms = { version = "0.1.6", features = ["crs-transform"] }
+# TIFF compression 7 (JPEG) is common for RGB COGs (e.g. cog_rgb.tif) but
+# isn't in oxigdal-geotiff's default feature set (deflate/lzw only).
+oxigdal-geotiff = { version = "0.1.6", features = ["jpeg"] }
 
 [dev-dependencies]
 tokio = { workspace = true }

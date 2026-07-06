@@ -1835,6 +1835,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
+name = "jpeg-encoder"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b0b36cbb4e6704f12f5b5d7b01dac593982c6550859ebd5a66fb15c9ea27fd5"
+
+[[package]]
 name = "js-sys"
 version = "0.3.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2172,6 +2187,7 @@ dependencies = [
  "object_store",
  "oxigdal",
  "oxigdal-algorithms",
+ "oxigdal-geotiff",
  "rayon",
  "serde",
  "serde_json",
@@ -2583,6 +2599,8 @@ checksum = "c57078488c984371abf5e9d8b9f0ffd61febea5c01e6cf63d5382878fad92fa7"
 dependencies = [
  "byteorder",
  "bytes",
+ "jpeg-decoder",
+ "jpeg-encoder",
  "oxiarc-deflate",
  "oxiarc-lzw",
  "oxigdal-core",
