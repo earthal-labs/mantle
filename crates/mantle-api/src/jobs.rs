@@ -97,6 +97,8 @@ mod tests {
             cache: CacheConfig {
                 redis_url: "redis://localhost:6379".into(),
                 ifd_ttl_seconds: 86400,
+                tile_ttl_seconds: 3600,
+                byte_cache_capacity_bytes: 256 * 1024 * 1024,
             },
             analytics: AnalyticsConfig {
                 broker: "redis-streams".into(),
@@ -124,6 +126,8 @@ mod tests {
             cache: Arc::new(mantle_cache::StubCacheClient::new(Arc::new(CacheConfig {
                 redis_url: "redis://localhost:6379".into(),
                 ifd_ttl_seconds: 86400,
+                tile_ttl_seconds: 3600,
+                byte_cache_capacity_bytes: 256 * 1024 * 1024,
             }))),
             raster: Arc::new(mantle_raster::StubRasterEngine::new(
                 Arc::new(StorageConfig {
@@ -135,6 +139,8 @@ mod tests {
                 Arc::new(mantle_cache::StubCacheClient::new(Arc::new(CacheConfig {
                     redis_url: "redis://localhost:6379".into(),
                     ifd_ttl_seconds: 86400,
+                    tile_ttl_seconds: 3600,
+                    byte_cache_capacity_bytes: 256 * 1024 * 1024,
                 }))),
             )),
             ingestion: Arc::new(StubIngestionService::new(Arc::new(

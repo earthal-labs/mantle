@@ -1,5 +1,6 @@
 //! `OxigdalRasterEngine` — COG tile rendering with cache + catalog integration.
 
+use crate::byte_cache::ByteRangeCache;
 use crate::cog::{debug_metadata as cog_debug_metadata, render_tile_layer};
 use crate::colormap::{apply_colormap, colormap_from_lut_id, normalize_band, parse_colormap};
 use crate::encode::{encode_empty_tile, encode_tile};
@@ -19,46 +20,66 @@ use mantle_render_ast::{
 use object_store::ObjectStore;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::debug;
+use std::time::Duration;
+use tracing::{debug, warn};
 
 /// Production raster engine: COG byte-range reads, Web Mercator warp, mosaic, colormap.
 ///
-/// Takes `cache`/`cache_config` for API-compatibility with callers that still
-/// wire up Redis (used elsewhere, e.g. cache-warming) — the oxigdal-based COG
-/// reader in `cog.rs` doesn't consult it today. A metadata-level cache (not
-/// raw IFD bytes) is a possible follow-up; see the plan notes.
+/// Two layers of caching sit in front of actual rendering work:
+/// - `byte_cache`: in-process cache of raw object-storage byte ranges (COG
+///   header/IFD/tile-offset arrays/tile data) — see `byte_cache` module docs.
+///   Eliminates the repeated-parsing cost of opening the same COG on every
+///   tile request.
+/// - `cache` (Redis, via `CacheClient::get_tile`/`set_tile`): the fully
+///   encoded output tile, keyed by dataset(s)/z/x/y/band/render_rule/format.
+///   A hit here skips rendering entirely — this is what gets a warm request
+///   down to a single Redis round trip.
 pub struct OxigdalRasterEngine {
     storage: Arc<StorageConfig>,
     catalog: Arc<dyn CatalogClient>,
     store: Arc<dyn ObjectStore>,
+    cache: Arc<dyn CacheClient>,
+    tile_ttl_seconds: u64,
+    byte_cache: ByteRangeCache,
 }
 
 impl OxigdalRasterEngine {
     pub fn new(
         storage: Arc<StorageConfig>,
-        _cache: Arc<dyn CacheClient>,
+        cache: Arc<dyn CacheClient>,
         catalog: Arc<dyn CatalogClient>,
-        _cache_config: &CacheConfig,
+        cache_config: &CacheConfig,
     ) -> Result<Self, RasterError> {
         let store = build_object_store(&storage)?;
+        let byte_cache = ByteRangeCache::new(
+            cache_config.byte_cache_capacity_bytes,
+            Duration::from_secs(cache_config.ifd_ttl_seconds),
+        );
         Ok(Self {
             storage,
             catalog,
             store,
+            cache,
+            tile_ttl_seconds: cache_config.tile_ttl_seconds,
+            byte_cache,
         })
     }
 
     pub fn with_store(
         storage: Arc<StorageConfig>,
-        _cache: Arc<dyn CacheClient>,
+        cache: Arc<dyn CacheClient>,
         catalog: Arc<dyn CatalogClient>,
         store: Arc<dyn ObjectStore>,
-        _cache_ttl: u64,
+        cache_ttl: u64,
     ) -> Self {
+        let byte_cache = ByteRangeCache::new(256 * 1024 * 1024, Duration::from_secs(cache_ttl));
         Self {
             storage,
             catalog,
             store,
+            cache,
+            tile_ttl_seconds: cache_ttl,
+            byte_cache,
         }
     }
 
@@ -95,7 +116,13 @@ impl OxigdalRasterEngine {
         let _ = band; // band index reserved for multi-band COG reads
         let (_bucket, s3_key) = parse_storage_uri(&dataset.storage_uri, &self.storage.bucket)?;
 
-        let values = render_tile_layer(self.store.clone(), &s3_key, *tile_bounds).await?;
+        let values = render_tile_layer(
+            self.store.clone(),
+            self.byte_cache.clone(),
+            &s3_key,
+            *tile_bounds,
+        )
+        .await?;
         let Some(values) = values else {
             return Ok(None);
         };
@@ -246,23 +273,18 @@ impl OxigdalRasterEngine {
         let rgba = apply_colormap(&normalized, &colormap);
         encode_tile(&rgba, TILE_SIZE, TILE_SIZE, format).map_err(RasterError::Encode)
     }
-}
 
-#[async_trait]
-impl RasterEngine for OxigdalRasterEngine {
-    async fn render_tile(
+    async fn render_tile_uncached(
         &self,
-        datasets: &[DatasetRef],
+        refs: &[DatasetRef],
         request: &TileRequest,
         format: TileFormat,
+        tile_bounds: &crate::tile_math::TileBounds,
     ) -> Result<Vec<u8>, RasterError> {
-        let tile_bounds = tile_bounds_web_mercator(request.z, request.x, request.y);
-        let refs = self.resolve_datasets(datasets, request).await?;
-
         if let Some(ref rule) = request.render_rule {
             if let Ok(expr) = parse_render_rule(rule) {
                 return self
-                    .render_ast_tile(&refs, request, format, &expr, &tile_bounds)
+                    .render_ast_tile(refs, request, format, &expr, tile_bounds)
                     .await;
             }
         }
@@ -271,8 +293,8 @@ impl RasterEngine for OxigdalRasterEngine {
         let colormap = parse_colormap(request.render_rule.as_deref());
 
         let mut layers = Vec::new();
-        for dataset in &refs {
-            if let Some(layer) = self.read_dataset_layer(dataset, &tile_bounds, band).await? {
+        for dataset in refs {
+            if let Some(layer) = self.read_dataset_layer(dataset, tile_bounds, band).await? {
                 layers.push(layer);
             }
         }
@@ -285,6 +307,59 @@ impl RasterEngine for OxigdalRasterEngine {
         let normalized = normalize_band(&merged.values);
         let rgba = apply_colormap(&normalized, &colormap);
         encode_tile(&rgba, TILE_SIZE, TILE_SIZE, format).map_err(RasterError::Encode)
+    }
+}
+
+/// Cache key for the encoded-output-tile cache: stable across the same
+/// resolved dataset set + request params + format, regardless of whether the
+/// caller passed `dataset_id` explicitly or datasets were resolved via
+/// spatial query (hence sorting — resolution order isn't guaranteed stable).
+fn tile_cache_key(refs: &[DatasetRef], request: &TileRequest, format: TileFormat) -> String {
+    let mut ids: Vec<String> = refs.iter().map(|d| d.id.to_string()).collect();
+    ids.sort_unstable();
+    format!(
+        "{}:{}:{}:{}:{}:{}:{:?}",
+        ids.join(","),
+        request.z,
+        request.x,
+        request.y,
+        request.band.unwrap_or(1),
+        request.render_rule.as_deref().unwrap_or(""),
+        format,
+    )
+}
+
+#[async_trait]
+impl RasterEngine for OxigdalRasterEngine {
+    async fn render_tile(
+        &self,
+        datasets: &[DatasetRef],
+        request: &TileRequest,
+        format: TileFormat,
+    ) -> Result<Vec<u8>, RasterError> {
+        let tile_bounds = tile_bounds_web_mercator(request.z, request.x, request.y);
+        let refs = self.resolve_datasets(datasets, request).await?;
+        let cache_key = tile_cache_key(&refs, request, format);
+
+        match self.cache.get_tile(&cache_key).await {
+            Ok(Some(bytes)) => return Ok(bytes),
+            Ok(None) => {}
+            Err(e) => warn!(error = %e, cache_key, "tile cache read failed; rendering fresh"),
+        }
+
+        let bytes = self
+            .render_tile_uncached(&refs, request, format, &tile_bounds)
+            .await?;
+
+        if let Err(e) = self
+            .cache
+            .set_tile(&cache_key, &bytes, self.tile_ttl_seconds)
+            .await
+        {
+            warn!(error = %e, cache_key, "tile cache write failed");
+        }
+
+        Ok(bytes)
     }
 
     async fn read_tile_bands(
@@ -312,7 +387,7 @@ impl RasterEngine for OxigdalRasterEngine {
             ));
         }
         let (_bucket, s3_key) = parse_storage_uri(&dataset.storage_uri, &self.storage.bucket)?;
-        cog_debug_metadata(self.store.clone(), &s3_key).await
+        cog_debug_metadata(self.store.clone(), self.byte_cache.clone(), &s3_key).await
     }
 }
 

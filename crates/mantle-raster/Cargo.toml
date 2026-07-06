@@ -17,6 +17,7 @@ bytes = "1"
 bincode = "1"
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 rayon = "1"
+moka = { version = "0.12", features = ["sync"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 geo-types = { workspace = true }

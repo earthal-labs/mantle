@@ -4,7 +4,10 @@ use mantle_arrow::{
     decode_dataset_refs, encode_dataset_ref, encode_job_spec, encode_tile_request, DatasetFormat,
     DatasetRef, JobSpec, TileRequest,
 };
-use mantle_cache::{ifd_key, zmeta_key, IFD_KEY_PREFIX, JOBS_STREAM_KEY, ZMETA_KEY_PREFIX};
+use mantle_cache::{
+    ifd_key, tile_key, zmeta_key, IFD_KEY_PREFIX, JOBS_STREAM_KEY, TILE_KEY_PREFIX,
+    ZMETA_KEY_PREFIX,
+};
 use mantle_config::MantleConfig;
 use chrono::Utc;
 use uuid::Uuid;
@@ -58,11 +61,16 @@ pub fn sample_dataset_ref() -> DatasetRef {
 pub fn assert_redis_key_contract() {
     assert_eq!(IFD_KEY_PREFIX, "mantle:ifd:");
     assert_eq!(ZMETA_KEY_PREFIX, "mantle:zmeta:");
+    assert_eq!(TILE_KEY_PREFIX, "mantle:tile:");
     assert_eq!(JOBS_STREAM_KEY, "mantle:jobs");
     assert_eq!(ifd_key("datasets/foo.tif"), "mantle:ifd:datasets/foo.tif");
     assert_eq!(
         zmeta_key("repo-abc"),
         "mantle:zmeta:repo-abc"
+    );
+    assert_eq!(
+        tile_key("id1:10:512:384:1::webp"),
+        "mantle:tile:id1:10:512:384:1::webp"
     );
 }
 
@@ -100,6 +108,8 @@ pub fn assert_config_contract() {
     assert_eq!(config.server.bind, "0.0.0.0:8080");
     assert_eq!(config.storage.bucket, "mantle-data");
     assert_eq!(config.cache.ifd_ttl_seconds, 86400);
+    assert_eq!(config.cache.tile_ttl_seconds, 3600);
+    assert_eq!(config.cache.byte_cache_capacity_bytes, 268_435_456);
     assert_eq!(config.analytics.stream_key, "mantle:jobs");
     assert_eq!(config.auth.admin_token_env, "MANTLE_ADMIN_TOKEN");
 }

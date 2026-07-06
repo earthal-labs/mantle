@@ -9,6 +9,7 @@
 //! oxigdal's generic `read_tile()` doesn't know about that tag, so we read
 //! raw tile bytes ourselves and merge the tables in before decoding.
 
+use crate::byte_cache::ByteRangeCache;
 use crate::oxigdal_source::ObjectStoreDataSource;
 use crate::storage::object_path;
 use crate::tile_math::{bilinear_sample, TileBounds, TILE_SIZE};
@@ -19,6 +20,7 @@ use oxigdal::core_types::io::{ByteRange, DataSource};
 use oxigdal::core_types::types::RasterDataType;
 use oxigdal::geotiff::tiff::{Compression, TiffTag};
 use oxigdal::geotiff::{compression, CogReader};
+use rayon::prelude::*;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -27,10 +29,11 @@ use tracing::warn;
 /// is this tile blank" without log-grepping or guessing tile coordinates.
 pub async fn debug_metadata(
     store: Arc<dyn ObjectStore>,
+    cache: ByteRangeCache,
     s3_key: &str,
 ) -> Result<CogDebugInfo, RasterError> {
     let path = object_path(s3_key);
-    let source = ObjectStoreDataSource::open(store, path)
+    let source = ObjectStoreDataSource::open(store, path, cache)
         .await
         .map_err(|e| RasterError::Cog(format!("head object {s3_key}: {e}")))?;
 
@@ -63,11 +66,12 @@ pub async fn debug_metadata(
 /// tile doesn't overlap the source's pixel extent at all.
 pub async fn render_tile_layer(
     store: Arc<dyn ObjectStore>,
+    cache: ByteRangeCache,
     s3_key: &str,
     tile_bounds: TileBounds,
 ) -> Result<Option<Vec<f32>>, RasterError> {
     let path = object_path(s3_key);
-    let source = ObjectStoreDataSource::open(store, path)
+    let source = ObjectStoreDataSource::open(store, path, cache)
         .await
         .map_err(|e| RasterError::Cog(format!("head object {s3_key}: {e}")))?;
 
@@ -251,35 +255,47 @@ fn read_window(
     let ty0 = row0 / tile_h;
     let ty1 = ((row1 - 1) / tile_h).min(tiles_down - 1);
 
-    for ty in ty0..=ty1 {
-        for tx in tx0..=tx1 {
-            let tile_bytes = read_tile_decoded(reader, tables_source, tx, ty)?;
+    // Fetch+decode covering source tiles concurrently (via rayon) rather
+    // than one at a time: each one is a blocking S3/MinIO round trip (on a
+    // cache miss), and a tile request commonly spans 2-4 source tiles, so
+    // serial reads pay that latency 2-4x over instead of ~once.
+    let tile_coords: Vec<(u32, u32)> = (ty0..=ty1)
+        .flat_map(|ty| (tx0..=tx1).map(move |tx| (tx, ty)))
+        .collect();
 
-            let tile_x0 = tx * tile_w;
-            let tile_y0 = ty * tile_h;
-            let this_tile_w = tile_w.min(width - tile_x0);
-            let this_tile_h = tile_h.min(height - tile_y0);
+    let decoded_tiles: Vec<(u32, u32, Vec<u8>)> = tile_coords
+        .into_par_iter()
+        .map(|(tx, ty)| {
+            let bytes = read_tile_decoded(reader, tables_source, tx, ty)?;
+            Ok::<_, RasterError>((tx, ty, bytes))
+        })
+        .collect::<Result<Vec<_>, RasterError>>()?;
 
-            let row_lo = row0.max(tile_y0);
-            let row_hi = row1.min(tile_y0 + this_tile_h);
-            let col_lo = col0.max(tile_x0);
-            let col_hi = col1.min(tile_x0 + this_tile_w);
+    for (tx, ty, tile_bytes) in decoded_tiles {
+        let tile_x0 = tx * tile_w;
+        let tile_y0 = ty * tile_h;
+        let this_tile_w = tile_w.min(width - tile_x0);
+        let this_tile_h = tile_h.min(height - tile_y0);
 
-            for global_row in row_lo..row_hi {
-                let local_row = global_row - tile_y0;
-                for global_col in col_lo..col_hi {
-                    let local_col = global_col - tile_x0;
-                    if let Some(v) = decode_sample(
-                        &tile_bytes,
-                        data_type,
-                        band_count,
-                        local_col,
-                        local_row,
-                        tile_w,
-                    ) {
-                        let out_idx = ((global_row - row0) * out_w + (global_col - col0)) as usize;
-                        out[out_idx] = v;
-                    }
+        let row_lo = row0.max(tile_y0);
+        let row_hi = row1.min(tile_y0 + this_tile_h);
+        let col_lo = col0.max(tile_x0);
+        let col_hi = col1.min(tile_x0 + this_tile_w);
+
+        for global_row in row_lo..row_hi {
+            let local_row = global_row - tile_y0;
+            for global_col in col_lo..col_hi {
+                let local_col = global_col - tile_x0;
+                if let Some(v) = decode_sample(
+                    &tile_bytes,
+                    data_type,
+                    band_count,
+                    local_col,
+                    local_row,
+                    tile_w,
+                ) {
+                    let out_idx = ((global_row - row0) * out_w + (global_col - col0)) as usize;
+                    out[out_idx] = v;
                 }
             }
         }

@@ -110,4 +110,18 @@ impl CacheClient for RedisCacheClient {
         conn.set_ex::<_, _, ()>(key, data, ttl).await?;
         Ok(())
     }
+
+    async fn get_tile(&self, key: &str) -> Result<Option<Vec<u8>>, CacheError> {
+        let key = crate::tile_key(key);
+        let value: Option<Vec<u8>> = self.conn.clone().get(key).await?;
+        Ok(value)
+    }
+
+    async fn set_tile(&self, key: &str, data: &[u8], ttl_seconds: u64) -> Result<(), CacheError> {
+        let key = crate::tile_key(key);
+        let ttl = resolve_ttl(ttl_seconds, self.default_ttl);
+        let mut conn = self.conn.clone();
+        conn.set_ex::<_, _, ()>(key, data, ttl).await?;
+        Ok(())
+    }
 }

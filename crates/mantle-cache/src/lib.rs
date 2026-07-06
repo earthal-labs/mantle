@@ -20,6 +20,8 @@ pub const IFD_KEY_PREFIX: &str = "mantle:ifd:";
 pub const ZMETA_KEY_PREFIX: &str = "mantle:zmeta:";
 /// Redis stream key for analytics jobs (mirrors config `analytics.stream_key`).
 pub const JOBS_STREAM_KEY: &str = "mantle:jobs";
+/// Redis key prefix for encoded output tile bytes (the render_tile result cache).
+pub const TILE_KEY_PREFIX: &str = "mantle:tile:";
 
 pub fn ifd_key(s3_key: &str) -> String {
     format!("{IFD_KEY_PREFIX}{s3_key}")
@@ -27,6 +29,10 @@ pub fn ifd_key(s3_key: &str) -> String {
 
 pub fn zmeta_key(repo_id: &str) -> String {
     format!("{ZMETA_KEY_PREFIX}{repo_id}")
+}
+
+pub fn tile_key(cache_key: &str) -> String {
+    format!("{TILE_KEY_PREFIX}{cache_key}")
 }
 
 /// Resolve TTL: explicit non-zero value wins; otherwise use config default.
@@ -63,6 +69,9 @@ pub trait CacheClient: Send + Sync {
         data: &[u8],
         ttl_seconds: u64,
     ) -> Result<(), CacheError>;
+    /// Encoded output tile bytes, keyed by dataset(s)/z/x/y/band/render_rule/format.
+    async fn get_tile(&self, key: &str) -> Result<Option<Vec<u8>>, CacheError>;
+    async fn set_tile(&self, key: &str, data: &[u8], ttl_seconds: u64) -> Result<(), CacheError>;
 }
 
 /// No-op cache client for tests and offline stubs.
@@ -101,6 +110,14 @@ impl CacheClient for StubCacheClient {
         _data: &[u8],
         _ttl_seconds: u64,
     ) -> Result<(), CacheError> {
+        Ok(())
+    }
+
+    async fn get_tile(&self, _key: &str) -> Result<Option<Vec<u8>>, CacheError> {
+        Ok(None)
+    }
+
+    async fn set_tile(&self, _key: &str, _data: &[u8], _ttl_seconds: u64) -> Result<(), CacheError> {
         Ok(())
     }
 }

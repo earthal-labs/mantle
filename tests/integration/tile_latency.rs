@@ -41,6 +41,8 @@ async fn tile_latency_p99_under_10ms() {
         redis_url: std::env::var(env::REDIS_URL)
             .unwrap_or_else(|_| "redis://localhost:6379".into()),
         ifd_ttl_seconds: 86400,
+        tile_ttl_seconds: 3600,
+        byte_cache_capacity_bytes: 256 * 1024 * 1024,
     };
     let catalog_config = Arc::new(CatalogConfig {
         postgres_url: std::env::var(env::POSTGRES_URL)

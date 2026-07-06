@@ -17,6 +17,8 @@ purge_poll_interval_seconds = 3600  # how often mantle-worker checks for eligibl
 [cache]
 redis_url = "redis://redis:6379"
 ifd_ttl_seconds = 86400
+tile_ttl_seconds = 3600          # encoded output tile cache (Redis)
+byte_cache_capacity_bytes = 268435456  # 256 MiB in-process COG byte-range cache
 
 [analytics]
 broker = "redis-streams"

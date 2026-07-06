@@ -49,6 +49,23 @@ fn default_purge_poll_interval_seconds() -> u64 {
 pub struct CacheConfig {
     pub redis_url: String,
     pub ifd_ttl_seconds: u64,
+    /// TTL for cached *encoded output tile* bytes (the render_tile result
+    /// cache in Redis, keyed by dataset(s)/z/x/y/band/render_rule/format).
+    #[serde(default = "default_tile_ttl_seconds")]
+    pub tile_ttl_seconds: u64,
+    /// Max size of the in-process cache of raw byte ranges read from object
+    /// storage (TIFF header/IFD/tile-offset arrays/tile data) — see
+    /// `mantle-raster`'s `ByteRangeCache`.
+    #[serde(default = "default_byte_cache_capacity_bytes")]
+    pub byte_cache_capacity_bytes: u64,
+}
+
+fn default_tile_ttl_seconds() -> u64 {
+    3600
+}
+
+fn default_byte_cache_capacity_bytes() -> u64 {
+    256 * 1024 * 1024
 }
 
 #[derive(Debug, Clone, Deserialize)]

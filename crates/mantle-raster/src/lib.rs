@@ -1,5 +1,6 @@
 //! COG/Icechunk raster read + tile encode.
 
+mod byte_cache;
 mod cog;
 mod colormap;
 mod encode;
