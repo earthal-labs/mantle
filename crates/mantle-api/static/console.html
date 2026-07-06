@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Mantle Console</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; background: #14161a; color: #e6e6e6; }
+  #topbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px; background: #1e2126; border-bottom: 1px solid #2c3038;
+  }
+  #topbar h1 { font-size: 15px; margin: 0 12px 0 0; color: #9cf; white-space: nowrap; }
+  #topbar input { font-family: monospace; font-size: 12px; padding: 5px 7px; background: #0f1114; color: #e6e6e6; border: 1px solid #383d47; border-radius: 3px; }
+  #admin-token { width: 220px; }
+  nav { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+  nav button { padding: 6px 12px; cursor: pointer; background: #262a31; color: #ccc; border: 1px solid #383d47; border-radius: 3px; font-size: 12px; }
+  nav button.active { background: #2f5f8f; color: #fff; border-color: #3f7fb0; }
+  main { padding: 14px; max-width: 1100px; }
+  section { display: none; }
+  section.active { display: block; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .row label { font-size: 12px; opacity: 0.85; display: flex; flex-direction: column; gap: 3px; }
+  input, textarea, select { font-family: monospace; font-size: 12px; padding: 6px 8px; background: #0f1114; color: #e6e6e6; border: 1px solid #383d47; border-radius: 3px; }
+  textarea { width: 100%; min-height: 60px; }
+  button.action { padding: 6px 12px; cursor: pointer; background: #2f5f8f; color: #fff; border: none; border-radius: 3px; }
+  button.action:hover { background: #3a72a8; }
+  button.danger { background: #8f3f3f; }
+  button.danger:hover { background: #a84c4c; }
+  pre { background: #0f1114; border: 1px solid #2c3038; border-radius: 3px; padding: 10px; max-height: 320px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 10px; }
+  th, td { border-bottom: 1px solid #2c3038; padding: 4px 8px; text-align: left; }
+  th { color: #9cf; }
+  fieldset { border: 1px solid #2c3038; border-radius: 4px; margin-bottom: 14px; padding: 10px 12px; }
+  legend { font-size: 12px; color: #9cf; padding: 0 6px; }
+  #map { height: 70vh; border: 1px solid #2c3038; border-radius: 3px; }
+  .hint { font-size: 11px; opacity: 0.6; margin: 4px 0 10px; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>Mantle Console</h1>
+  <label style="font-size:12px;">admin token
+    <input id="admin-token" placeholder="MANTLE_ADMIN_TOKEN" />
+  </label>
+  <nav id="tabs">
+    <button data-tab="health" class="active">Health</button>
+    <button data-tab="stac">STAC</button>
+    <button data-tab="datasets">Datasets</button>
+    <button data-tab="tiles">Tiles</button>
+    <button data-tab="plugins">Plugins</button>
+    <button data-tab="jobs">Jobs</button>
+  </nav>
+</div>
+
+<main>
+
+  <section id="panel-health" class="active">
+    <fieldset>
+      <legend>GET /health</legend>
+      <button class="action" onclick="checkHealth()">Check</button>
+      <pre id="health-output"></pre>
+    </fieldset>
+  </section>
+
+  <section id="panel-stac">
+    <fieldset>
+      <legend>GET /stac/search</legend>
+      <div class="row">
+        <label>bbox (minx,miny,maxx,maxy)<input id="stac-bbox" placeholder="optional" style="width:220px" /></label>
+        <label>limit<input id="stac-limit" value="10" style="width:60px" /></label>
+        <button class="action" onclick="stacSearch()">Search</button>
+        <button class="action" onclick="stacCollections()">List collections</button>
+      </div>
+      <div id="stac-table"></div>
+      <pre id="stac-output"></pre>
+    </fieldset>
+  </section>
+
+  <section id="panel-datasets">
+    <fieldset>
+      <legend>POST /admin/datasets/upload</legend>
+      <div class="row">
+        <label>name<input id="up-name" placeholder="optional" /></label>
+        <label>file<input id="up-file" type="file" /></label>
+        <button class="action" onclick="uploadDataset()">Upload</button>
+      </div>
+      <pre id="upload-output"></pre>
+    </fieldset>
+
+    <fieldset>
+      <legend>POST /admin/datasets/reference</legend>
+      <div class="row">
+        <label>name<input id="ref-name" /></label>
+        <label>storage_uri<input id="ref-uri" placeholder="s3://bucket/key.tif" style="width:320px" /></label>
+        <button class="action" onclick="referenceDataset()">Register</button>
+      </div>
+      <pre id="reference-output"></pre>
+    </fieldset>
+
+    <fieldset>
+      <legend>Manage a dataset</legend>
+      <div class="row">
+        <label>dataset_id<input id="mgmt-id" style="width:300px" /></label>
+      </div>
+      <div class="row">
+        <button class="action" onclick="datasetDebug()">Debug metadata</button>
+        <button class="action danger" onclick="datasetDelete()">Soft-delete</button>
+        <button class="action danger" onclick="datasetPurge()">Purge now</button>
+      </div>
+      <div class="hint">Soft-delete then Purge = immediate hard delete, bypassing the retention window.</div>
+
+      <div class="row">
+        <label>function_id<input id="attach-fn" value="ndvi" style="width:120px" /></label>
+        <label>endpoint_slug<input id="attach-slug" placeholder="optional" style="width:140px" /></label>
+      </div>
+      <div class="row">
+        <label style="flex:1;">params_defaults (JSON)
+          <textarea id="attach-params">{"red_band": 1, "nir_band": 2}</textarea>
+        </label>
+      </div>
+      <button class="action" onclick="attachFunction()">Attach vRPM/pRPM</button>
+      <pre id="mgmt-output"></pre>
+    </fieldset>
+  </section>
+
+  <section id="panel-tiles">
+    <fieldset>
+      <legend>Tile viewer</legend>
+      <div class="row">
+        <label>mode
+          <select id="tile-mode">
+            <option value="dataset">raw dataset</option>
+            <option value="service">vRPM service</option>
+          </select>
+        </label>
+        <label>dataset_id<input id="tile-dataset-id" style="width:280px" /></label>
+        <label>service slug<input id="tile-slug" style="width:140px" /></label>
+        <label>format<input id="tile-format" value="webp" style="width:60px" /></label>
+        <button class="action" onclick="loadOverlay()">Load overlay</button>
+        <span id="tile-status" class="hint"></span>
+      </div>
+      <div id="map"></div>
+    </fieldset>
+  </section>
+
+  <section id="panel-plugins">
+    <fieldset>
+      <legend>GET /plugins</legend>
+      <button class="action" onclick="listPlugins()">List</button>
+      <div id="plugins-table"></div>
+      <pre id="plugins-output"></pre>
+    </fieldset>
+  </section>
+
+  <section id="panel-jobs">
+    <fieldset>
+      <legend>POST /ogc/processes/{process_id}/execution</legend>
+      <div class="row">
+        <label>process_id<input id="job-process" value="minimal_prpm" style="width:160px" /></label>
+        <label style="flex:1;">inputs (JSON)
+          <textarea id="job-inputs">{"values": [1, 2, 3, 4, 5]}</textarea>
+        </label>
+      </div>
+      <button class="action" onclick="submitJob()">Submit</button>
+      <pre id="submit-output"></pre>
+    </fieldset>
+
+    <fieldset>
+      <legend>GET /status/{job_id}</legend>
+      <div class="row">
+        <label>job_id<input id="job-id" style="width:300px" /></label>
+        <button class="action" onclick="pollJob()">Poll</button>
+      </div>
+      <pre id="poll-output"></pre>
+    </fieldset>
+  </section>
+
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  // ---- tabs ----
+  document.getElementById('tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-tab]');
+    if (!btn) return;
+    document.querySelectorAll('#tabs button').forEach((b) => b.classList.remove('active'));
+    document.querySelectorAll('main section').forEach((s) => s.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'tiles' && map) {
+      setTimeout(() => map.invalidateSize(), 50);
+    }
+  });
+
+  // ---- shared helpers ----
+  const tokenInput = document.getElementById('admin-token');
+  tokenInput.value = localStorage.getItem('mantle_admin_token') || '';
+  tokenInput.addEventListener('input', () => {
+    localStorage.setItem('mantle_admin_token', tokenInput.value);
+  });
+
+  function authHeaders(extra) {
+    const headers = Object.assign({}, extra);
+    const token = tokenInput.value.trim();
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    return headers;
+  }
+
+  function show(id, data) {
+    document.getElementById(id).textContent =
+      typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  }
+
+  async function asJson(res) {
+    const text = await res.text();
+    try { return JSON.parse(text); } catch { return text; }
+  }
+
+  // ---- health ----
+  async function checkHealth() {
+    const res = await fetch('/health');
+    show('health-output', await asJson(res));
+  }
+
+  // ---- stac ----
+  async function stacSearch() {
+    const bbox = document.getElementById('stac-bbox').value.trim();
+    const limit = document.getElementById('stac-limit').value.trim() || '10';
+    const qs = new URLSearchParams({ limit });
+    if (bbox) qs.set('bbox', bbox);
+    const res = await fetch(`/stac/search?${qs}`);
+    const data = await asJson(res);
+    show('stac-output', data);
+    renderStacTable(data);
+  }
+
+  async function stacCollections() {
+    const res = await fetch('/stac/collections');
+    show('stac-output', await asJson(res));
+    document.getElementById('stac-table').innerHTML = '';
+  }
+
+  function renderStacTable(data) {
+    const features = (data && data.features) || [];
+    const table = document.getElementById('stac-table');
+    if (!features.length) {
+      table.innerHTML = '<em>no features</em>';
+      return;
+    }
+    const rows = features.map((f) => `<tr>
+        <td>${f.id}</td>
+        <td>${(f.properties && f.properties.title) || ''}</td>
+        <td>${(f.properties && f.properties['mantle:format']) || ''}</td>
+        <td><button class="action" onclick="useDataset('${f.id}')">use in Tiles/Datasets</button></td>
+      </tr>`).join('');
+    table.innerHTML = `<table><tr><th>id</th><th>name</th><th>format</th><th></th></tr>${rows}</table>`;
+  }
+
+  function useDataset(id) {
+    document.getElementById('mgmt-id').value = id;
+    document.getElementById('tile-dataset-id').value = id;
+    document.getElementById('tile-mode').value = 'dataset';
+  }
+
+  // ---- datasets (admin) ----
+  async function uploadDataset() {
+    const fileInput = document.getElementById('up-file');
+    if (!fileInput.files.length) {
+      show('upload-output', 'select a file first');
+      return;
+    }
+    const form = new FormData();
+    const name = document.getElementById('up-name').value.trim();
+    if (name) form.append('name', name);
+    form.append('file', fileInput.files[0]);
+    const res = await fetch('/admin/datasets/upload', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+    });
+    const data = await asJson(res);
+    show('upload-output', data);
+    if (data && data.dataset_id) useDataset(data.dataset_id);
+  }
+
+  async function referenceDataset() {
+    const name = document.getElementById('ref-name').value.trim();
+    const storage_uri = document.getElementById('ref-uri').value.trim();
+    const res = await fetch('/admin/datasets/reference', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ name, storage_uri }),
+    });
+    const data = await asJson(res);
+    show('reference-output', data);
+    if (data && data.dataset_id) useDataset(data.dataset_id);
+  }
+
+  function mgmtId() {
+    return document.getElementById('mgmt-id').value.trim();
+  }
+
+  async function datasetDebug() {
+    const res = await fetch(`/admin/datasets/${mgmtId()}/debug`, { headers: authHeaders() });
+    show('mgmt-output', await asJson(res));
+  }
+
+  async function datasetDelete() {
+    const res = await fetch(`/admin/datasets/${mgmtId()}/delete`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ reason: 'deleted via console' }),
+    });
+    show('mgmt-output', await asJson(res));
+  }
+
+  async function datasetPurge() {
+    const res = await fetch(`/admin/datasets/${mgmtId()}/purge`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    show('mgmt-output', `HTTP ${res.status}`);
+  }
+
+  async function attachFunction() {
+    const function_id = document.getElementById('attach-fn').value.trim();
+    const endpoint_slug = document.getElementById('attach-slug').value.trim() || undefined;
+    let params_defaults = {};
+    try {
+      params_defaults = JSON.parse(document.getElementById('attach-params').value || '{}');
+    } catch (e) {
+      show('mgmt-output', 'invalid params_defaults JSON: ' + e.message);
+      return;
+    }
+    const res = await fetch(`/admin/services/${mgmtId()}/attach`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ function_id, params_defaults, endpoint_slug }),
+    });
+    const data = await asJson(res);
+    show('mgmt-output', data);
+    if (data && data.slug) document.getElementById('tile-slug').value = data.slug;
+  }
+
+  // ---- tiles (native leaflet viewer) ----
+  const map = L.map('map', { worldCopyJump: true }).setView([20, 25], 2);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+  }).addTo(map);
+  let overlay = null;
+
+  function tileUrlTemplate() {
+    const format = document.getElementById('tile-format').value.trim() || 'webp';
+    const mode = document.getElementById('tile-mode').value;
+    if (mode === 'service') {
+      const slug = document.getElementById('tile-slug').value.trim();
+      return `/services/${encodeURIComponent(slug)}/tiles/{z}/{x}/{y}?format=${encodeURIComponent(format)}`;
+    }
+    const datasetId = document.getElementById('tile-dataset-id').value.trim();
+    return `/tiles/{z}/{x}/{y}?dataset_id=${encodeURIComponent(datasetId)}&format=${encodeURIComponent(format)}`;
+  }
+
+  function loadOverlay() {
+    if (overlay) map.removeLayer(overlay);
+    const url = tileUrlTemplate();
+    const statusEl = document.getElementById('tile-status');
+    statusEl.textContent = 'loading: ' + url;
+    let loaded = 0, errored = 0;
+    overlay = L.tileLayer(url, {
+      opacity: 0.85,
+      maxZoom: 19,
+      errorTileUrl:
+        'data:image/svg+xml;base64,' +
+        btoa('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">' +
+             '<rect width="256" height="256" fill="#300"/>' +
+             '<text x="10" y="20" fill="#f66" font-size="14">tile error</text></svg>'),
+    });
+    overlay.on('tileload', () => { loaded++; statusEl.textContent = `loaded ${loaded}, ${errored} error(s)`; });
+    overlay.on('tileerror', () => { errored++; statusEl.textContent = `loaded ${loaded}, ${errored} error(s)`; });
+    overlay.addTo(map);
+  }
+
+  // ---- plugins ----
+  async function listPlugins() {
+    const res = await fetch('/plugins');
+    const data = await asJson(res);
+    show('plugins-output', data);
+    const list = Array.isArray(data) ? data : [];
+    const rows = list.map((p) => `<tr><td>${p.id}</td><td>${p.model_kind}</td><td>${p.version}</td></tr>`).join('');
+    document.getElementById('plugins-table').innerHTML = list.length
+      ? `<table><tr><th>id</th><th>kind</th><th>version</th></tr>${rows}</table>`
+      : '';
+  }
+
+  // ---- jobs ----
+  async function submitJob() {
+    const processId = document.getElementById('job-process').value.trim();
+    let inputs = {};
+    try {
+      inputs = JSON.parse(document.getElementById('job-inputs').value || '{}');
+    } catch (e) {
+      show('submit-output', 'invalid inputs JSON: ' + e.message);
+      return;
+    }
+    const res = await fetch(`/ogc/processes/${encodeURIComponent(processId)}/execution`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputs, datasets: [] }),
+    });
+    const data = await asJson(res);
+    show('submit-output', data);
+    if (data && data.job_id) document.getElementById('job-id').value = data.job_id;
+  }
+
+  async function pollJob() {
+    const id = document.getElementById('job-id').value.trim();
+    const res = await fetch(`/status/${id}`);
+    show('poll-output', await asJson(res));
+  }
+</script>
+</body>
+</html>

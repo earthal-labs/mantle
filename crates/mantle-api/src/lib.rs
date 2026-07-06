@@ -18,7 +18,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
     http::{header, StatusCode},
     middleware,
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -91,6 +91,14 @@ async fn health() -> Json<HealthResponse> {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
     })
+}
+
+/// `GET /console` — barebones dev console (STAC search, dataset admin
+/// actions, a native Leaflet tile viewer, plugin listing, job submit/poll).
+/// Embedded at compile time so it ships with the binary; no separate static
+/// file to remember to copy into the Docker image.
+async fn console() -> Html<&'static str> {
+    Html(include_str!("../static/console.html"))
 }
 
 async fn get_tile(
@@ -210,6 +218,7 @@ pub async fn build_router(config: Arc<MantleConfig>) -> anyhow::Result<Router> {
 
     Ok(Router::new()
         .route("/health", get(health))
+        .route("/console", get(console))
         .route("/status/{job_id}", get(get_job_status))
         .route("/tiles/{z}/{x}/{y}", get(get_tile))
         // Register landing on the parent — nest("/stac")+route("/") does not
@@ -235,6 +244,18 @@ pub async fn serve(config: MantleConfig) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod console_tests {
+    use super::console;
+
+    #[tokio::test]
+    async fn console_serves_embedded_html() {
+        let response = console().await;
+        assert!(response.0.contains("Mantle Console"));
+        assert!(response.0.contains("id=\"map\""));
+    }
 }
 
 pub use auth::constant_time_eq;

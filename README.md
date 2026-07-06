@@ -85,6 +85,7 @@ All routes are served by `mantle-api` unless noted. Admin routes require `Author
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Liveness / readiness |
+| GET | `/console` | Barebones dev console — STAC search, dataset admin, native Leaflet tile viewer, plugin listing, job submit/poll |
 | GET | `/status/{job_id}` | Async job polling (`queued` → `running` → `succeeded` / `failed`) |
 | GET | `/tiles/{z}/{x}/{y}` | Legacy tile shortcut (`?dataset_id`, `?band`, `?format`, `?render`) |
 | POST | `/admin/datasets/upload` | Multipart COG upload (field `file`) |
