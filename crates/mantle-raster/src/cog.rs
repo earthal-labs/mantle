@@ -2,6 +2,12 @@
 //! and real TIFF decompression, replacing a hand-rolled parser that got all
 //! three wrong (see `oxigdal_source.rs` for why it must run inside
 //! `spawn_blocking`, and the plan notes for the full history).
+//!
+//! Uses `CogReader` (not the higher-level `GeoTiffReader` wrapper) because
+//! JPEG-compressed COGs commonly store their quantization/Huffman tables
+//! once in the shared `JPEGTables` tag (347) rather than in every tile —
+//! oxigdal's generic `read_tile()` doesn't know about that tag, so we read
+//! raw tile bytes ourselves and merge the tables in before decoding.
 
 use crate::oxigdal_source::ObjectStoreDataSource;
 use crate::storage::object_path;
@@ -9,9 +15,10 @@ use crate::tile_math::{bilinear_sample, TileBounds, TILE_SIZE};
 use crate::{CogDebugInfo, RasterError};
 use object_store::ObjectStore;
 use oxigdal::algorithms::vector::{Coordinate, CrsTransformer};
-use oxigdal::core_types::io::DataSource;
+use oxigdal::core_types::io::{ByteRange, DataSource};
 use oxigdal::core_types::types::RasterDataType;
-use oxigdal::geotiff::GeoTiffReader;
+use oxigdal::geotiff::tiff::{Compression, TiffTag};
+use oxigdal::geotiff::{compression, CogReader};
 use std::sync::Arc;
 use tracing::warn;
 
@@ -28,17 +35,22 @@ pub async fn debug_metadata(
         .map_err(|e| RasterError::Cog(format!("head object {s3_key}: {e}")))?;
 
     tokio::task::spawn_blocking(move || {
-        let reader = GeoTiffReader::open(source)
+        let reader = CogReader::open(source)
             .map_err(|e| RasterError::Cog(format!("open geotiff: {e}")))?;
+        let info = reader.primary_info();
+
+        let geo_transform = reader
+            .geo_transform()
+            .map_err(|e| RasterError::Cog(format!("read geo_transform: {e}")))?;
 
         Ok(CogDebugInfo {
             width: reader.width(),
             height: reader.height(),
-            band_count: reader.band_count(),
-            data_type: reader.data_type().map(|d| format!("{d:?}")),
+            band_count: info.samples_per_pixel as u32,
+            data_type: info.data_type().map(|d| format!("{d:?}")),
             tile_size: reader.tile_size(),
             epsg_code: reader.epsg_code(),
-            geo_transform: reader.geo_transform().copied(),
+            geo_transform,
         })
     })
     .await
@@ -68,13 +80,21 @@ fn read_and_warp(
     source: ObjectStoreDataSource,
     tile_bounds: TileBounds,
 ) -> Result<Option<Vec<f32>>, RasterError> {
-    let reader = GeoTiffReader::open(source)
+    // Keep an independent handle to fetch the JPEGTables tag value (if any)
+    // ourselves — `CogReader::open` takes ownership of `source` and doesn't
+    // expose its internal DataSource.
+    let tables_source = source.clone();
+
+    let reader = CogReader::open(source)
         .map_err(|e| RasterError::Cog(format!("open geotiff: {e}")))?;
 
     let width = reader.width() as u32;
     let height = reader.height() as u32;
 
-    let Some(geo_transform) = reader.geo_transform() else {
+    let geo_transform = reader
+        .geo_transform()
+        .map_err(|e| RasterError::Cog(format!("read geo_transform: {e}")))?;
+    let Some(geo_transform) = geo_transform else {
         warn!(width, height, "cog: no geo_transform detected; cannot place tile");
         return Ok(None);
     };
@@ -155,9 +175,10 @@ fn read_and_warp(
         return Ok(None);
     }
 
-    let data_type = reader.data_type().unwrap_or(RasterDataType::UInt8);
-    let band_count = reader.band_count().max(1);
-    let window = read_window(&reader, col0, row0, col1, row1, data_type, band_count)?;
+    let info = reader.primary_info();
+    let data_type = info.data_type().unwrap_or(RasterDataType::UInt8);
+    let band_count = (info.samples_per_pixel as u32).max(1);
+    let window = read_window(&reader, &tables_source, col0, row0, col1, row1, data_type, band_count)?;
     let src_w = col1 - col0;
     let src_h = row1 - row0;
 
@@ -196,11 +217,13 @@ fn read_and_warp(
 }
 
 /// Assembles a pixel window from oxigdal's whole-tile reads (no windowed
-/// read exists upstream — see the plan notes). `read_tile` already handles
-/// TIFF decompression and predictor reversal; this only has to decode raw
-/// samples and crop tiles to the requested window.
-fn read_window<S: DataSource>(
-    reader: &GeoTiffReader<S>,
+/// read exists upstream — see the plan notes). Decoding is done ourselves
+/// (not via `CogReader::read_tile`) so JPEG-with-shared-tables data can be
+/// merged and decoded correctly; see `read_tile_decoded`.
+#[allow(clippy::too_many_arguments)]
+fn read_window(
+    reader: &CogReader<ObjectStoreDataSource>,
+    tables_source: &ObjectStoreDataSource,
     col0: u32,
     row0: u32,
     col1: u32,
@@ -230,9 +253,7 @@ fn read_window<S: DataSource>(
 
     for ty in ty0..=ty1 {
         for tx in tx0..=tx1 {
-            let tile_bytes = reader
-                .read_tile(0, tx, ty)
-                .map_err(|e| RasterError::Cog(format!("read tile ({tx},{ty}): {e}")))?;
+            let tile_bytes = read_tile_decoded(reader, tables_source, tx, ty)?;
 
             let tile_x0 = tx * tile_w;
             let tile_y0 = ty * tile_h;
@@ -267,10 +288,84 @@ fn read_window<S: DataSource>(
     Ok(out)
 }
 
+/// Reads and decompresses one tile (level 0), mirroring `CogReader::read_tile`
+/// exactly except for the JPEG path: if the IFD has a `JPEGTables` tag (347),
+/// its bytes are fetched and merged with the tile's raw JPEG stream before
+/// decoding — the generic `read_tile` doesn't do this, which is what caused
+/// "use of unset quantization table" for JPEG-compressed COGs that share
+/// their tables (a common GDAL default).
+fn read_tile_decoded(
+    reader: &CogReader<ObjectStoreDataSource>,
+    tables_source: &ObjectStoreDataSource,
+    tile_x: u32,
+    tile_y: u32,
+) -> Result<Vec<u8>, RasterError> {
+    let compressed = reader
+        .read_tile_raw(0, tile_x, tile_y)
+        .map_err(|e| RasterError::Cog(format!("read tile raw ({tile_x},{tile_y}): {e}")))?;
+
+    let info = reader.primary_info();
+    let is_tiled = info.tile_width.is_some() && info.tile_height.is_some();
+    let (tile_width, tile_height) = if is_tiled {
+        (
+            info.tile_width.unwrap_or(info.width as u32),
+            info.tile_height.unwrap_or(info.height as u32),
+        )
+    } else {
+        let strip_height = info.rows_per_strip.unwrap_or(info.height as u32);
+        let actual_height = if tile_y == reader.tile_count().1.saturating_sub(1) {
+            let remaining = info.height as u32 - (tile_y * strip_height);
+            remaining.min(strip_height)
+        } else {
+            strip_height
+        };
+        (info.width as u32, actual_height)
+    };
+
+    let bytes_per_sample = info.bits_per_sample.first().map_or(1, |&b| (b / 8) as usize);
+    let samples_per_pixel = info.samples_per_pixel as usize;
+    let expected_size =
+        tile_width as usize * tile_height as usize * bytes_per_sample * samples_per_pixel;
+
+    let mut decompressed = if info.compression == Compression::Jpeg {
+        match reader.tiff().ifds[0].get_entry(TiffTag::JpegTables) {
+            Some(entry) => {
+                let tables = if let Some(inline) = &entry.inline_value {
+                    inline[..entry.value_size() as usize].to_vec()
+                } else {
+                    tables_source
+                        .read_range(ByteRange::from_offset_length(
+                            entry.value_offset,
+                            entry.value_size(),
+                        ))
+                        .map_err(|e| RasterError::Cog(format!("read JPEGTables: {e}")))?
+                };
+                compression::decompress_jpeg_with_tables(&tables, &compressed)
+                    .map_err(|e| RasterError::Cog(format!("jpeg decompress with tables: {e}")))?
+            }
+            None => compression::decompress(&compressed, info.compression, expected_size)
+                .map_err(|e| RasterError::Cog(format!("decompress: {e}")))?,
+        }
+    } else {
+        compression::decompress(&compressed, info.compression, expected_size)
+            .map_err(|e| RasterError::Cog(format!("decompress: {e}")))?
+    };
+
+    compression::apply_predictor_reverse(
+        &mut decompressed,
+        info.predictor,
+        bytes_per_sample,
+        samples_per_pixel,
+        tile_width as usize,
+    );
+
+    Ok(decompressed)
+}
+
 /// Decodes band 0 of a single sample from an already-decompressed tile
 /// buffer. Assumes little-endian byte order (the overwhelming common case
-/// for modern-generated COGs); `GeoTiffReader`'s public API doesn't expose
-/// the source file's byte order to check otherwise.
+/// for modern-generated COGs); oxigdal's public API doesn't expose the
+/// source file's byte order to check otherwise.
 fn decode_sample(
     data: &[u8],
     data_type: RasterDataType,

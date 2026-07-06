@@ -13,6 +13,7 @@ use oxigdal::core_types::io::{ByteRange, DataSource};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 
+#[derive(Clone)]
 pub struct ObjectStoreDataSource {
     store: Arc<dyn ObjectStore>,
     path: Path,
