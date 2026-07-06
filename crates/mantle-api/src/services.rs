@@ -266,7 +266,10 @@ async fn render_virtual_tile(
                 .raster
                 .render_tile(&[dataset.to_dataset_ref()], &request, format)
                 .await
-                .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "tile render failed"))?;
+                .map_err(|e| {
+                    warn!(error = %e, z, x, y, "tile render failed");
+                    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "tile render failed")
+                })?;
             return Ok(tile_response(bytes, format));
         }
         VirtualServiceKind::Attached => {}
@@ -316,7 +319,10 @@ async fn render_virtual_tile(
         .raster
         .read_tile_bands(&parent.to_dataset_ref(), &request, &indices)
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "band read failed"))?;
+        .map_err(|e| {
+            warn!(error = %e, z, x, y, "band read failed");
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "band read failed")
+        })?;
 
     let mut named_layers = HashMap::new();
     for (name, &band_idx) in &band_map {
@@ -348,8 +354,10 @@ async fn render_virtual_tile(
     };
     let normalized = normalize_band(&values);
     let rgba = apply_colormap(&normalized, &colormap);
-    let bytes = encode_tile(&rgba, TILE_SIZE, TILE_SIZE, format)
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "encode failed"))?;
+    let bytes = encode_tile(&rgba, TILE_SIZE, TILE_SIZE, format).map_err(|e| {
+        warn!(error = %e, "tile encode failed");
+        ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "encode failed")
+    })?;
 
     Ok(tile_response(bytes, format))
 }

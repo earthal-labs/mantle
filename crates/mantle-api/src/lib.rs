@@ -33,7 +33,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{error, info};
 use uuid::Uuid;
 
 impl axum::extract::FromRef<AppState> for Arc<dyn CatalogClient> {
@@ -122,7 +122,10 @@ async fn get_tile(
         .raster
         .render_tile(&datasets, &request, format)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            error!(error = %e, z, x, y, %dataset_id, "tile render failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok((
         StatusCode::OK,
