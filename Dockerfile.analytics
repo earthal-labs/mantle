@@ -1,6 +1,11 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.11-slim AS runtime
+# Pinned to match the exact Python patch version baked into
+# rayproject/ray:2.40.0-py311 (the fixed cluster image in docker-compose.yml)
+# — Ray's client/server handshake checks both Ray *and* Python version,
+# and an unpinned tag here previously drifted to a newer patch and broke
+# analytics-worker's connection to the cluster.
+FROM python:3.11.10-slim AS runtime
 
 WORKDIR /app
 

@@ -16,9 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ray = ["ray[default]>=2.40"]
+ray = ["ray[default]==2.40.0"]
 dev = ["pytest>=8.0", "ruff>=0.8"]
-analytics = ["ray[default]>=2.40", "boto3>=1.35"]
+analytics = ["ray[default]==2.40.0", "boto3>=1.35"]
 
 [tool.uv]
 package = true
