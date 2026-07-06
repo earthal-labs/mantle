@@ -162,4 +162,32 @@ pub async fn purge_dataset(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `GET /admin/datasets/{id}/debug` — reports what the raster engine
+/// (oxigdal) actually detects for a dataset: CRS, geotransform, dimensions,
+/// tiling. Direct diagnostic for "why is this tile blank" without
+/// log-grepping or guessing tile coordinates.
+pub async fn debug_dataset(
+    State(state): State<AppState>,
+    Path(dataset_id): Path<Uuid>,
+) -> Result<Json<mantle_raster::CogDebugInfo>, ApiError> {
+    let dataset = state
+        .catalog
+        .get_dataset(dataset_id)
+        .await
+        .map_err(services::catalog_err)?;
+
+    let info = state
+        .raster
+        .debug_metadata(&dataset.to_dataset_ref())
+        .await
+        .map_err(|e| match e {
+            mantle_raster::RasterError::NotImplemented(msg) => {
+                ApiError::new(StatusCode::BAD_REQUEST, msg)
+            }
+            other => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
+        })?;
+
+    Ok(Json(info))
+}
+
 pub use services::attach_function;

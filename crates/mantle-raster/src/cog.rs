@@ -6,7 +6,7 @@
 use crate::oxigdal_source::ObjectStoreDataSource;
 use crate::storage::object_path;
 use crate::tile_math::{bilinear_sample, TileBounds, TILE_SIZE};
-use crate::RasterError;
+use crate::{CogDebugInfo, RasterError};
 use object_store::ObjectStore;
 use oxigdal::algorithms::vector::{Coordinate, CrsTransformer};
 use oxigdal::core_types::io::DataSource;
@@ -14,6 +14,36 @@ use oxigdal::core_types::types::RasterDataType;
 use oxigdal::geotiff::GeoTiffReader;
 use std::sync::Arc;
 use tracing::warn;
+
+/// Reports what oxigdal actually detects for a dataset (CRS, geotransform,
+/// dimensions, tiling) without rendering a tile — the direct answer to "why
+/// is this tile blank" without log-grepping or guessing tile coordinates.
+pub async fn debug_metadata(
+    store: Arc<dyn ObjectStore>,
+    s3_key: &str,
+) -> Result<CogDebugInfo, RasterError> {
+    let path = object_path(s3_key);
+    let source = ObjectStoreDataSource::open(store, path)
+        .await
+        .map_err(|e| RasterError::Cog(format!("head object {s3_key}: {e}")))?;
+
+    tokio::task::spawn_blocking(move || {
+        let reader = GeoTiffReader::open(source)
+            .map_err(|e| RasterError::Cog(format!("open geotiff: {e}")))?;
+
+        Ok(CogDebugInfo {
+            width: reader.width(),
+            height: reader.height(),
+            band_count: reader.band_count(),
+            data_type: reader.data_type().map(|d| format!("{d:?}")),
+            tile_size: reader.tile_size(),
+            epsg_code: reader.epsg_code(),
+            geo_transform: reader.geo_transform().copied(),
+        })
+    })
+    .await
+    .map_err(|e| RasterError::Cog(format!("blocking task join: {e}")))?
+}
 
 /// Fetch, reproject, and resample a dataset's pixels onto a `TILE_SIZE` x
 /// `TILE_SIZE` Web Mercator grid covering `tile_bounds`. Returns `None` when

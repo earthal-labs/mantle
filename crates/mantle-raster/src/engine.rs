@@ -1,12 +1,12 @@
 //! `OxigdalRasterEngine` — COG tile rendering with cache + catalog integration.
 
-use crate::cog::render_tile_layer;
+use crate::cog::{debug_metadata as cog_debug_metadata, render_tile_layer};
 use crate::colormap::{apply_colormap, colormap_from_lut_id, normalize_band, parse_colormap};
 use crate::encode::{encode_empty_tile, encode_tile};
 use crate::mosaic::{mosaic_by_reducer, mosaic_first_valid, TileLayer};
 use crate::storage::{build_object_store, parse_storage_uri};
 use crate::tile_math::{tile_bounds_web_mercator, TILE_SIZE};
-use crate::{RasterEngine, RasterError, TileFormat};
+use crate::{CogDebugInfo, RasterEngine, RasterError, TileFormat};
 use async_trait::async_trait;
 use mantle_arrow::{DatasetFormat, DatasetRef, TileRequest};
 use mantle_cache::CacheClient;
@@ -304,6 +304,16 @@ impl RasterEngine for OxigdalRasterEngine {
         }
         Ok(layers)
     }
+
+    async fn debug_metadata(&self, dataset: &DatasetRef) -> Result<CogDebugInfo, RasterError> {
+        if dataset.format != DatasetFormat::Cog {
+            return Err(RasterError::NotImplemented(
+                "debug_metadata only supports COG datasets".into(),
+            ));
+        }
+        let (_bucket, s3_key) = parse_storage_uri(&dataset.storage_uri, &self.storage.bucket)?;
+        cog_debug_metadata(self.store.clone(), &s3_key).await
+    }
 }
 
 /// Stub raster engine — returns empty tile bytes (no S3/catalog).
@@ -342,5 +352,11 @@ impl RasterEngine for StubRasterEngine {
             .iter()
             .map(|_| TileLayer::transparent(TILE_SIZE, TILE_SIZE))
             .collect())
+    }
+
+    async fn debug_metadata(&self, _dataset: &DatasetRef) -> Result<CogDebugInfo, RasterError> {
+        Err(RasterError::NotImplemented(
+            "debug_metadata not supported by stub engine".into(),
+        ))
     }
 }

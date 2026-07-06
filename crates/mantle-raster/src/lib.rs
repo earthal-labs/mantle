@@ -17,7 +17,24 @@ pub use tile_math::{tile_bounds_web_mercator, TileBounds, TILE_SIZE};
 
 use async_trait::async_trait;
 use mantle_arrow::{DatasetRef, TileRequest};
+use oxigdal::core_types::types::GeoTransform;
+use serde::Serialize;
 use thiserror::Error;
+
+/// What oxigdal actually detected for a dataset — surfaced directly via
+/// `GET /admin/datasets/{id}/debug` so a CRS/geotransform mismatch can be
+/// diagnosed from one curl instead of log-grepping or guessing tile
+/// coordinates.
+#[derive(Debug, Clone, Serialize)]
+pub struct CogDebugInfo {
+    pub width: u64,
+    pub height: u64,
+    pub band_count: u32,
+    pub data_type: Option<String>,
+    pub tile_size: Option<(u32, u32)>,
+    pub epsg_code: Option<u32>,
+    pub geo_transform: Option<GeoTransform>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TileFormat {
@@ -73,6 +90,10 @@ pub trait RasterEngine: Send + Sync {
         request: &TileRequest,
         band_indices: &[u32],
     ) -> Result<Vec<TileLayer>, RasterError>;
+
+    /// Report what the raster engine actually detects for a dataset
+    /// (CRS, geotransform, dimensions, tiling) without rendering a tile.
+    async fn debug_metadata(&self, dataset: &DatasetRef) -> Result<CogDebugInfo, RasterError>;
 }
 
 #[cfg(test)]
