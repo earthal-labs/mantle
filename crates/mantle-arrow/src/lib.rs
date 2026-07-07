@@ -11,10 +11,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DatasetRef {
+pub struct ServiceRef {
     pub id: Uuid,
     pub name: String,
-    pub format: DatasetFormat,
+    pub format: ServiceFormat,
     pub storage_uri: String,
     pub crs: Option<String>,
     /// Footprint geometry as WKT (e.g. `POLYGON((...))`), when known.
@@ -24,14 +24,14 @@ pub struct DatasetRef {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum DatasetFormat {
+pub enum ServiceFormat {
     Cog,
     Icechunk,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TileRequest {
-    pub dataset_id: Uuid,
+    pub service_id: Uuid,
     pub z: u32,
     pub x: u32,
     pub y: u32,
@@ -43,7 +43,7 @@ pub struct TileRequest {
 pub struct JobSpec {
     pub job_id: Uuid,
     pub process_id: String,
-    pub dataset_refs: Vec<DatasetRef>,
+    pub service_refs: Vec<ServiceRef>,
     pub params: serde_json::Value,
     pub submitted_at: DateTime<Utc>,
 }
@@ -56,8 +56,8 @@ pub enum ArrowError {
     Serde(#[from] serde_json::Error),
 }
 
-/// IPC schema for `DatasetRef` batches (Rust → Python).
-pub fn dataset_ref_schema() -> Schema {
+/// IPC schema for `ServiceRef` batches (Rust → Python).
+pub fn service_ref_schema() -> Schema {
     Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
         Field::new("name", DataType::Utf8, false),
@@ -70,7 +70,7 @@ pub fn dataset_ref_schema() -> Schema {
 /// IPC schema for `TileRequest` batches.
 pub fn tile_request_schema() -> Schema {
     Schema::new(vec![
-        Field::new("dataset_id", DataType::Utf8, false),
+        Field::new("service_id", DataType::Utf8, false),
         Field::new("z", DataType::UInt32, false),
         Field::new("x", DataType::UInt32, false),
         Field::new("y", DataType::UInt32, false),
@@ -89,18 +89,18 @@ pub fn job_spec_schema() -> Schema {
     ])
 }
 
-/// Encode a single `DatasetRef` as an Arrow IPC stream (one-record batch).
-pub fn encode_dataset_ref(dataset: &DatasetRef) -> Result<Vec<u8>, ArrowError> {
-    let schema = Arc::new(dataset_ref_schema());
-    let id = Arc::new(StringArray::from(vec![dataset.id.to_string()]));
-    let name = Arc::new(StringArray::from(vec![dataset.name.as_str()]));
+/// Encode a single `ServiceRef` as an Arrow IPC stream (one-record batch).
+pub fn encode_service_ref(service: &ServiceRef) -> Result<Vec<u8>, ArrowError> {
+    let schema = Arc::new(service_ref_schema());
+    let id = Arc::new(StringArray::from(vec![service.id.to_string()]));
+    let name = Arc::new(StringArray::from(vec![service.name.as_str()]));
     let format = Arc::new(StringArray::from(vec![format!(
         "{:?}",
-        dataset.format
+        service.format
     )
     .to_lowercase()]));
-    let storage_uri = Arc::new(StringArray::from(vec![dataset.storage_uri.as_str()]));
-    let crs = Arc::new(StringArray::from(vec![dataset.crs.as_deref()]));
+    let storage_uri = Arc::new(StringArray::from(vec![service.storage_uri.as_str()]));
+    let crs = Arc::new(StringArray::from(vec![service.crs.as_deref()]));
 
     let batch = RecordBatch::try_new(
         schema.clone(),
@@ -116,8 +116,8 @@ pub fn encode_dataset_ref(dataset: &DatasetRef) -> Result<Vec<u8>, ArrowError> {
     Ok(buffer)
 }
 
-/// Decode `DatasetRef` records from an Arrow IPC stream.
-pub fn decode_dataset_refs(bytes: &[u8]) -> Result<Vec<DatasetRef>, ArrowError> {
+/// Decode `ServiceRef` records from an Arrow IPC stream.
+pub fn decode_service_refs(bytes: &[u8]) -> Result<Vec<ServiceRef>, ArrowError> {
     let cursor = Cursor::new(bytes);
     let reader = StreamReader::try_new(cursor, None)?;
     let mut refs = Vec::new();
@@ -152,10 +152,10 @@ pub fn decode_dataset_refs(bytes: &[u8]) -> Result<Vec<DatasetRef>, ArrowError> 
 
         for i in 0..batch.num_rows() {
             let format = match formats.value(i) {
-                "cog" => DatasetFormat::Cog,
-                _ => DatasetFormat::Icechunk,
+                "cog" => ServiceFormat::Cog,
+                _ => ServiceFormat::Icechunk,
             };
-            refs.push(DatasetRef {
+            refs.push(ServiceRef {
                 id: Uuid::parse_str(ids.value(i)).unwrap_or_default(),
                 name: names.value(i).to_string(),
                 format,
@@ -177,7 +177,7 @@ pub fn decode_dataset_refs(bytes: &[u8]) -> Result<Vec<DatasetRef>, ArrowError> 
 /// Encode a `TileRequest` as Arrow IPC.
 pub fn encode_tile_request(request: &TileRequest) -> Result<Vec<u8>, ArrowError> {
     let schema = Arc::new(tile_request_schema());
-    let dataset_id = Arc::new(StringArray::from(vec![request.dataset_id.to_string()]));
+    let service_id = Arc::new(StringArray::from(vec![request.service_id.to_string()]));
     let z = Arc::new(UInt32Array::from(vec![request.z]));
     let x = Arc::new(UInt32Array::from(vec![request.x]));
     let y = Arc::new(UInt32Array::from(vec![request.y]));
@@ -189,7 +189,7 @@ pub fn encode_tile_request(request: &TileRequest) -> Result<Vec<u8>, ArrowError>
 
     let batch = RecordBatch::try_new(
         schema.clone(),
-        vec![dataset_id, z, x, y, band, render_rule],
+        vec![service_id, z, x, y, band, render_rule],
     )?;
 
     let mut buffer = Vec::new();

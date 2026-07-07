@@ -70,15 +70,15 @@ mod tests {
     #[test]
     fn parse_s3_uri_extracts_bucket_and_key() {
         let (bucket, key) =
-            parse_storage_uri("s3://mantle-data/datasets/a.tif", "fallback").expect("parse");
+            parse_storage_uri("s3://mantle-data/services/a.tif", "fallback").expect("parse");
         assert_eq!(bucket, "mantle-data");
-        assert_eq!(key, "datasets/a.tif");
+        assert_eq!(key, "services/a.tif");
     }
 
     #[test]
     fn parse_relative_uri_uses_default_bucket() {
-        let (bucket, key) = parse_storage_uri("datasets/a.tif", "mantle-data").expect("parse");
+        let (bucket, key) = parse_storage_uri("services/a.tif", "mantle-data").expect("parse");
         assert_eq!(bucket, "mantle-data");
-        assert_eq!(key, "datasets/a.tif");
+        assert_eq!(key, "services/a.tif");
     }
 }

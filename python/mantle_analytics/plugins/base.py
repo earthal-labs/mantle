@@ -49,7 +49,7 @@ class JobInputs:
     """Validated inputs for a Persistent Raster Processing Model (pRPM) job."""
 
     params: dict[str, Any]
-    dataset_refs: list[dict[str, Any]] = field(default_factory=list)
+    service_refs: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -68,11 +68,11 @@ class JobResult:
     data: Any
     output_kind: Literal["cog", "zarr", "json", "geojson", "text"] | None = None
     output_name: str | None = None
-    dataset_name: str | None = None
+    service_name: str | None = None
 
 
 class VirtualRasterProcessingModel(ABC):
-    """Per-tile pixel math on existing datasets without persisting outputs (vRPM)."""
+    """Per-tile pixel math on existing services without persisting outputs (vRPM)."""
 
     id: str
     version: str
@@ -123,16 +123,16 @@ class PersistentRasterProcessingModel(ABC):
 
         specs = self.parameters()
         validate_params_against_specs(specs, inputs.params)
-        dataset_spec = next(
+        service_spec = next(
             (
                 spec
                 for spec in input_parameters(specs)
-                if spec.param_type == ParamType.DATASET
+                if spec.param_type == ParamType.SERVICE
             ),
             None,
         )
-        if dataset_spec and dataset_spec.required and not inputs.dataset_refs:
-            raise ValueError(f"{dataset_spec.name} requires dataset_refs")
+        if service_spec and service_spec.required and not inputs.service_refs:
+            raise ValueError(f"{service_spec.name} requires service_refs")
 
     @abstractmethod
     def run(self, inputs: JobInputs, ctx: AnalyticsContext) -> JobResult:

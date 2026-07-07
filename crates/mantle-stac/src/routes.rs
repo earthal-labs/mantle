@@ -1,5 +1,5 @@
 use crate::filter::StacSearchRequest;
-use crate::items::{build_collection_items, build_item_collection, datasets_to_stac_items};
+use crate::items::{build_collection_items, build_item_collection, services_to_stac_items};
 use crate::models::{collection_list, default_collection, landing_catalog, DEFAULT_COLLECTION_ID};
 use axum::{
     extract::{FromRef, Path, Query, State},
@@ -76,13 +76,13 @@ where
     let StacState { catalog } = StacState::from_ref(&state);
     let limit = params.effective_limit();
     let query = params.to_spatial_query();
-    let datasets = catalog
+    let services = catalog
         .spatial_query(query)
         .await
         .map_err(catalog_to_status)?;
 
-    let take = (limit as usize).min(datasets.len());
-    let features = datasets_to_stac_items(&datasets[..take]);
+    let take = (limit as usize).min(services.len());
+    let features = services_to_stac_items(&services[..take]);
     let body = build_collection_items(features, &id);
     Ok(Json(serde_json::to_value(body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?))
 }
@@ -125,14 +125,14 @@ where
     let StacState { catalog } = StacState::from_ref(&state);
     let limit = params.effective_limit();
     let query = params.to_spatial_query();
-    let datasets = catalog
+    let services = catalog
         .spatial_query(query)
         .await
         .map_err(catalog_to_status)?;
 
-    let matched = datasets.len() as u64;
-    let take = (limit as usize).min(datasets.len());
-    let features = datasets_to_stac_items(&datasets[..take]);
+    let matched = services.len() as u64;
+    let take = (limit as usize).min(services.len());
+    let features = services_to_stac_items(&services[..take]);
     let body = build_item_collection(features, matched);
     Ok(Json(serde_json::to_value(body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?).into_response())
 }
@@ -150,43 +150,43 @@ fn catalog_to_status(err: CatalogError) -> StatusCode {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use mantle_arrow::{DatasetFormat, DatasetRef};
+    use mantle_arrow::{ServiceFormat, ServiceRef};
     use mantle_catalog::{
-        DatasetRecord, FootprintRecord, SpatialQuery, StubCatalogClient, VirtualServiceRecord,
+        FootprintRecord, ServiceRecord, SpatialQuery, StubCatalogClient, VirtualServiceRecord,
     };
     use mantle_config::CatalogConfig;
     use uuid::Uuid;
 
     struct MockCatalog {
-        datasets: Vec<DatasetRef>,
+        services: Vec<ServiceRef>,
     }
 
     #[async_trait]
     impl CatalogClient for MockCatalog {
         async fn insert_footprint(
             &self,
-            dataset: DatasetRecord,
+            service: ServiceRecord,
             _footprint: FootprintRecord,
         ) -> Result<Uuid, CatalogError> {
-            Ok(dataset.id)
+            Ok(service.id)
         }
 
-        async fn spatial_query(&self, _query: SpatialQuery) -> Result<Vec<DatasetRef>, CatalogError> {
-            Ok(self.datasets.clone())
+        async fn spatial_query(&self, _query: SpatialQuery) -> Result<Vec<ServiceRef>, CatalogError> {
+            Ok(self.services.clone())
         }
 
-        async fn get_dataset(&self, id: Uuid) -> Result<DatasetRecord, CatalogError> {
+        async fn get_service(&self, id: Uuid) -> Result<ServiceRecord, CatalogError> {
             Err(CatalogError::NotFound(id))
         }
 
         async fn attach_function(
             &self,
-            _dataset_id: Uuid,
+            _service_id: Uuid,
             _function_id: String,
             _params_defaults: serde_json::Value,
             _endpoint_slug: Option<String>,
         ) -> Result<VirtualServiceRecord, CatalogError> {
-            Err(CatalogError::NotFound(_dataset_id))
+            Err(CatalogError::NotFound(_service_id))
         }
 
         async fn get_virtual_service_by_slug(
@@ -196,29 +196,36 @@ mod tests {
             Err(CatalogError::ServiceNotFound(slug.to_string()))
         }
 
+        async fn list_virtual_services(
+            &self,
+            _service_id: Option<Uuid>,
+        ) -> Result<Vec<VirtualServiceRecord>, CatalogError> {
+            Ok(Vec::new())
+        }
+
         async fn register_output_service(
             &self,
-            _output_dataset: DatasetRecord,
+            _output_service: ServiceRecord,
             _function_id: String,
             _endpoint_slug: String,
         ) -> Result<VirtualServiceRecord, CatalogError> {
             Err(CatalogError::NotFound(Uuid::nil()))
         }
 
-        async fn soft_delete_dataset(
+        async fn soft_delete_service(
             &self,
-            dataset_id: Uuid,
+            service_id: Uuid,
             _reason: Option<String>,
         ) -> Result<mantle_catalog::DeletionRecord, CatalogError> {
-            Err(CatalogError::NotFound(dataset_id))
+            Err(CatalogError::NotFound(service_id))
         }
 
-        async fn get_dataset_any(&self, id: Uuid) -> Result<DatasetRecord, CatalogError> {
+        async fn get_service_any(&self, id: Uuid) -> Result<ServiceRecord, CatalogError> {
             Err(CatalogError::NotFound(id))
         }
 
-        async fn purge_dataset(&self, dataset_id: Uuid) -> Result<(), CatalogError> {
-            Err(CatalogError::NotFound(dataset_id))
+        async fn purge_service(&self, service_id: Uuid) -> Result<(), CatalogError> {
+            Err(CatalogError::NotFound(service_id))
         }
     }
 
@@ -237,11 +244,11 @@ mod tests {
 
     #[tokio::test]
     async fn search_respects_limit() {
-        let datasets: Vec<DatasetRef> = (0..5)
-            .map(|i| DatasetRef {
+        let services: Vec<ServiceRef> = (0..5)
+            .map(|i| ServiceRef {
                 id: Uuid::new_v4(),
-                name: format!("ds-{i}"),
-                format: DatasetFormat::Cog,
+                name: format!("svc-{i}"),
+                format: ServiceFormat::Cog,
                 storage_uri: format!("s3://bucket/{i}.tif"),
                 crs: None,
                 geometry_wkt: None,
@@ -250,7 +257,7 @@ mod tests {
 
         let app = TestApp {
             catalog: Arc::new(MockCatalog {
-                datasets: datasets.clone(),
+                services: services.clone(),
             }),
         };
 

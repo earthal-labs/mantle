@@ -87,16 +87,16 @@ impl RedisJobQueueClient {
 impl JobQueueClient for RedisJobQueueClient {
     async fn enqueue_job(&self, job: &JobSpec) -> Result<Uuid, CacheError> {
         let mut job_for_stream = job.clone();
-        if !job.dataset_refs.is_empty() {
+        if !job.service_refs.is_empty() {
             if let serde_json::Value::Object(ref mut map) = job_for_stream.params {
                 map.insert(
-                    "dataset_refs".into(),
-                    serde_json::to_value(&job.dataset_refs)
+                    "service_refs".into(),
+                    serde_json::to_value(&job.service_refs)
                         .map_err(|err| CacheError::Redis(err.to_string()))?,
                 );
             } else {
                 job_for_stream.params = serde_json::json!({
-                    "dataset_refs": job.dataset_refs,
+                    "service_refs": job.service_refs,
                     "inputs": job.params,
                 });
             }
@@ -199,7 +199,7 @@ mod tests {
         let job = JobSpec {
             job_id: Uuid::new_v4(),
             process_id: "ndvi".into(),
-            dataset_refs: vec![],
+            service_refs: vec![],
             params: serde_json::json!({}),
             submitted_at: Utc::now(),
         };

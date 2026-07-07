@@ -2,7 +2,6 @@
 
 mod admin;
 mod auth;
-mod datasets;
 mod error;
 mod jobs;
 mod vrpm_client;
@@ -10,11 +9,10 @@ mod plugins;
 mod services;
 
 use admin::{
-    attach_function, debug_dataset, delete_dataset, purge_dataset, register_cloud_reference,
-    upload_dataset,
+    attach_function, debug_service, delete_service, purge_service, register_cloud_reference,
+    upload_service,
 };
 use auth::{load_admin_token, require_admin_auth};
-use datasets::get_dataset_resource;
 use jobs::get_job_status;
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
@@ -24,7 +22,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use mantle_arrow::{DatasetRef, TileRequest};
+use mantle_arrow::{ServiceRef, TileRequest};
 use mantle_cache::{CacheClient, JobQueueClient, RedisCacheClient, RedisJobQueueClient};
 use mantle_catalog::{CatalogClient, PostgresDuckLakeCatalog, StubCatalogClient};
 use mantle_config::MantleConfig;
@@ -84,7 +82,7 @@ struct HealthResponse {
 pub struct TileQuery {
     pub format: Option<String>,
     pub band: Option<u32>,
-    pub dataset_id: Option<Uuid>,
+    pub service_id: Option<Uuid>,
     pub render: Option<String>,
 }
 
@@ -95,7 +93,7 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
-/// `GET /console` — barebones dev console (STAC search, dataset admin
+/// `GET /console` — barebones dev console (STAC search, service admin
 /// actions, a native Leaflet tile viewer, plugin listing, job submit/poll).
 /// Embedded at compile time so it ships with the binary; no separate static
 /// file to remember to copy into the Docker image.
@@ -109,10 +107,10 @@ async fn get_tile(
     Query(params): Query<TileQuery>,
 ) -> Result<Response, StatusCode> {
     let format = TileFormat::from_query(params.format.as_deref());
-    let dataset_id = params.dataset_id.unwrap_or_else(Uuid::nil);
+    let service_id = params.service_id.unwrap_or_else(Uuid::nil);
 
     let request = TileRequest {
-        dataset_id,
+        service_id,
         z,
         x,
         y,
@@ -120,9 +118,9 @@ async fn get_tile(
         render_rule: params.render,
     };
 
-    let datasets: Vec<DatasetRef> = if params.dataset_id.is_some() {
-        match state.catalog.get_dataset(dataset_id).await {
-            Ok(record) => vec![record.to_dataset_ref()],
+    let services: Vec<ServiceRef> = if params.service_id.is_some() {
+        match state.catalog.get_service(service_id).await {
+            Ok(record) => vec![record.to_service_ref()],
             Err(_) => Vec::new(),
         }
     } else {
@@ -131,10 +129,10 @@ async fn get_tile(
 
     let bytes = state
         .raster
-        .render_tile(&datasets, &request, format)
+        .render_tile(&services, &request, format)
         .await
         .map_err(|e| {
-            error!(error = %e, z, x, y, %dataset_id, "tile render failed");
+            error!(error = %e, z, x, y, %service_id, "tile render failed");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
@@ -199,12 +197,12 @@ pub async fn build_router(config: Arc<MantleConfig>) -> anyhow::Result<Router> {
     const ADMIN_BODY_LIMIT: usize = 512 * 1024 * 1024;
 
     let admin_routes = Router::new()
-        .route("/datasets/upload", post(upload_dataset))
-        .route("/datasets/reference", post(register_cloud_reference))
-        .route("/datasets/{id}/delete", post(delete_dataset))
-        .route("/datasets/{id}/purge", post(purge_dataset))
-        .route("/datasets/{id}/debug", get(debug_dataset))
-        .route("/services/{dataset_id}/attach", post(attach_function))
+        .route("/services/upload", post(upload_service))
+        .route("/services/reference", post(register_cloud_reference))
+        .route("/services/{id}/delete", post(delete_service))
+        .route("/services/{id}/purge", post(purge_service))
+        .route("/services/{id}/debug", get(debug_service))
+        .route("/services/{service_id}/attach", post(attach_function))
         .layer(DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -222,7 +220,6 @@ pub async fn build_router(config: Arc<MantleConfig>) -> anyhow::Result<Router> {
         .route("/health", get(health))
         .route("/console", get(console))
         .route("/status/{job_id}", get(get_job_status))
-        .route("/datasets/{id}", get(get_dataset_resource))
         .route("/tiles/{z}/{x}/{y}", get(get_tile))
         // Register landing on the parent — nest("/stac")+route("/") does not
         // reliably match both `/stac` and `/stac/` in Axum 0.8.

@@ -10,7 +10,7 @@ use axum::{
 };
 use futures_util::{StreamExt, TryStreamExt};
 use mantle_ingestion::{
-    build_object_store, dataset_object_key, delete_by_storage_uri, storage_uri,
+    build_object_store, delete_by_storage_uri, service_object_key, storage_uri,
     upload_stream_with_header_peek, CloudReferenceRequest, IngestionError, IngestionResponse,
     UploadRequest,
 };
@@ -18,8 +18,8 @@ use serde::Deserialize;
 use tracing::info;
 use uuid::Uuid;
 
-/// `POST /admin/datasets/upload` — multipart upload (field `file`, optional `name`).
-pub async fn upload_dataset(
+/// `POST /admin/services/upload` — multipart upload (field `file`, optional `name`).
+pub async fn upload_service(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> Result<Json<IngestionResponse>, ApiError> {
@@ -58,7 +58,7 @@ pub async fn upload_dataset(
                 }
 
                 let name = name.unwrap_or_else(|| filename.clone());
-                let dataset_id = uuid::Uuid::new_v4();
+                let service_id = uuid::Uuid::new_v4();
                 let request = UploadRequest {
                     name,
                     content_type,
@@ -67,7 +67,7 @@ pub async fn upload_dataset(
                 };
 
                 let store = build_object_store(&state.config.storage).map_err(ApiError::from)?;
-                let key = dataset_object_key(dataset_id, &filename);
+                let key = service_object_key(service_id, &filename);
                 let uri = storage_uri(&state.config.storage.bucket, &key);
 
                 let stream = field.into_stream().map(|result| {
@@ -76,14 +76,14 @@ pub async fn upload_dataset(
                 let (_bytes, header_peek) =
                     upload_stream_with_header_peek(store, &key, stream).await?;
 
-                let dataset_id = state
+                let service_id = state
                     .ingestion
-                    .register_uploaded_dataset(request, dataset_id, uri, header_peek)
+                    .register_uploaded_service(request, service_id, uri, header_peek)
                     .await
                     .map_err(ApiError::from)?;
 
-                info!(%dataset_id, "dataset uploaded via admin API");
-                return Ok(Json(IngestionResponse { dataset_id }));
+                info!(%service_id, "service uploaded via admin API");
+                return Ok(Json(IngestionResponse { service_id }));
             }
             _ => {}
         }
@@ -95,7 +95,7 @@ pub async fn upload_dataset(
     ))
 }
 
-/// `POST /admin/datasets/reference` — register external cloud reference URI.
+/// `POST /admin/services/reference` — register external cloud reference URI.
 pub async fn register_cloud_reference(
     State(state): State<AppState>,
     Json(body): Json<CloudReferenceRequest>,
@@ -110,85 +110,85 @@ pub async fn register_cloud_reference(
         ));
     }
 
-    let dataset_id = state
+    let service_id = state
         .ingestion
         .register_cloud_reference(body)
         .await
         .map_err(ApiError::from)?;
 
-    info!(%dataset_id, "cloud reference registered via admin API");
-    Ok(Json(IngestionResponse { dataset_id }))
+    info!(%service_id, "cloud reference registered via admin API");
+    Ok(Json(IngestionResponse { service_id }))
 }
 
 #[derive(Debug, Deserialize, Default)]
-pub struct DeleteDatasetRequest {
+pub struct DeleteServiceRequest {
     pub reason: Option<String>,
 }
 
-/// `POST /admin/datasets/{id}/delete` — soft-delete: hidden from every read
+/// `POST /admin/services/{id}/delete` — soft-delete: hidden from every read
 /// path immediately, physically purged later (scheduled job or `/purge`).
-pub async fn delete_dataset(
+pub async fn delete_service(
     State(state): State<AppState>,
-    Path(dataset_id): Path<Uuid>,
-    body: Option<Json<DeleteDatasetRequest>>,
+    Path(service_id): Path<Uuid>,
+    body: Option<Json<DeleteServiceRequest>>,
 ) -> Result<Json<mantle_catalog::DeletionRecord>, ApiError> {
     let reason = body.and_then(|Json(b)| b.reason);
     let record = state
         .catalog
-        .soft_delete_dataset(dataset_id, reason)
+        .soft_delete_service(service_id, reason)
         .await
         .map_err(services::catalog_err)?;
 
-    info!(%dataset_id, "dataset soft-deleted via admin API");
+    info!(%service_id, "service soft-deleted via admin API");
     Ok(Json(record))
 }
 
-/// `POST /admin/datasets/{id}/purge` — admin-only immediate hard purge,
-/// bypassing the retention window. Requires the dataset to have been
-/// soft-deleted first (`get_dataset_any` still finds it, `get_dataset` would
+/// `POST /admin/services/{id}/purge` — admin-only immediate hard purge,
+/// bypassing the retention window. Requires the service to have been
+/// soft-deleted first (`get_service_any` still finds it, `get_service` would
 /// 404 on it since it's tombstoned).
-pub async fn purge_dataset(
+pub async fn purge_service(
     State(state): State<AppState>,
-    Path(dataset_id): Path<Uuid>,
+    Path(service_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let dataset = state
+    let service = state
         .catalog
-        .get_dataset_any(dataset_id)
+        .get_service_any(service_id)
         .await
         .map_err(services::catalog_err)?;
 
     let store = build_object_store(&state.config.storage).map_err(ApiError::from)?;
-    delete_by_storage_uri(store, &state.config.storage.bucket, &dataset.storage_uri)
+    delete_by_storage_uri(store, &state.config.storage.bucket, &service.storage_uri)
         .await
         .map_err(ApiError::from)?;
 
     state
         .catalog
-        .purge_dataset(dataset_id)
+        .purge_service(service_id)
         .await
         .map_err(services::catalog_err)?;
 
-    info!(%dataset_id, "dataset purged via admin API (immediate override)");
+    info!(%service_id, "service purged via admin API (immediate override)");
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /admin/datasets/{id}/debug` — reports what the raster engine
-/// (oxigdal) actually detects for a dataset: CRS, geotransform, dimensions,
+/// `GET /admin/services/{id}/debug` — reports what the raster engine
+/// (oxigdal) actually detects for a service: CRS, geotransform, dimensions,
 /// tiling. Direct diagnostic for "why is this tile blank" without
 /// log-grepping or guessing tile coordinates.
-pub async fn debug_dataset(
+pub async fn debug_service(
     State(state): State<AppState>,
-    Path(dataset_id): Path<Uuid>,
+    Path(service_id): Path<Uuid>,
 ) -> Result<Json<mantle_raster::CogDebugInfo>, ApiError> {
-    let dataset = state
+    let service = state
         .catalog
-        .get_dataset(dataset_id)
+        .get_service(service_id)
         .await
         .map_err(services::catalog_err)?;
 
     let info = state
         .raster
-        .debug_metadata(&dataset.to_dataset_ref())
+        .debug_metadata(&service.to_service_ref())
         .await
         .map_err(|e| match e {
             mantle_raster::RasterError::NotImplemented(msg) => {

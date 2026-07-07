@@ -12,7 +12,7 @@ fn redis_key_schema_matches_agents_md() {
 }
 
 #[test]
-fn arrow_ipc_round_trip_dataset_tile_job() {
+fn arrow_ipc_round_trip_service_tile_job() {
     assert_arrow_round_trip();
 }
 

@@ -9,7 +9,7 @@
 //! # Partition strategy
 //!
 //! Footprint Parquet files are partitioned by **acquisition month** (`YYYY-MM`), derived
-//! from the dataset `temporal_start` (or the insert time when absent). Paths look like:
+//! from the service `temporal_start` (or the insert time when absent). Paths look like:
 //!
 //! ```text
 //! {ducklake_data_path}partitions/2024-07/{uuid}.parquet
@@ -37,19 +37,19 @@ pub use services::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use geo_types::Rect;
-use mantle_arrow::{DatasetFormat, DatasetRef};
+use mantle_arrow::{ServiceFormat, ServiceRef};
 use mantle_config::CatalogConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DatasetRecord {
+pub struct ServiceRecord {
     pub id: Uuid,
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    pub format: DatasetFormat,
+    pub format: ServiceFormat,
     pub storage_uri: String,
     pub crs: Option<String>,
     pub temporal_start: Option<DateTime<Utc>>,
@@ -57,15 +57,15 @@ pub struct DatasetRecord {
     pub created_at: DateTime<Utc>,
 }
 
-impl DatasetRecord {
-    pub fn to_dataset_ref(&self) -> DatasetRef {
-        DatasetRef {
+impl ServiceRecord {
+    pub fn to_service_ref(&self) -> ServiceRef {
+        ServiceRef {
             id: self.id,
             name: self.name.clone(),
             format: self.format,
             storage_uri: self.storage_uri.clone(),
             crs: self.crs.clone(),
-            // DatasetRecord doesn't carry footprint geometry (that lives in
+            // ServiceRecord doesn't carry footprint geometry (that lives in
             // FootprintRecord/the DuckLake-backed table) — only spatial_query
             // populates this field.
             geometry_wkt: None,
@@ -75,7 +75,7 @@ impl DatasetRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FootprintRecord {
-    pub dataset_id: Uuid,
+    pub service_id: Uuid,
     pub geometry_wkt: String,
     pub cloud_cover: Option<f64>,
     pub partition_key: String,
@@ -86,7 +86,7 @@ pub struct FootprintRecord {
 /// immediate-purge admin override).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeletionRecord {
-    pub dataset_id: Uuid,
+    pub service_id: Uuid,
     pub deleted_at: DateTime<Utc>,
     pub purge_eligible_at: DateTime<Utc>,
 }
@@ -103,18 +103,18 @@ pub struct SpatialQuery {
 pub trait CatalogClient: Send + Sync {
     async fn insert_footprint(
         &self,
-        dataset: DatasetRecord,
+        service: ServiceRecord,
         footprint: FootprintRecord,
     ) -> Result<Uuid, CatalogError>;
 
-    async fn spatial_query(&self, query: SpatialQuery) -> Result<Vec<DatasetRef>, CatalogError>;
+    async fn spatial_query(&self, query: SpatialQuery) -> Result<Vec<ServiceRef>, CatalogError>;
 
-    async fn get_dataset(&self, id: Uuid) -> Result<DatasetRecord, CatalogError>;
+    async fn get_service(&self, id: Uuid) -> Result<ServiceRecord, CatalogError>;
 
-    /// Attach an on-the-fly raster function to an existing dataset (virtual service).
+    /// Attach an on-the-fly raster function to an existing service (virtual service).
     async fn attach_function(
         &self,
-        dataset_id: Uuid,
+        service_id: Uuid,
         function_id: String,
         params_defaults: serde_json::Value,
         endpoint_slug: Option<String>,
@@ -126,45 +126,52 @@ pub trait CatalogClient: Send + Sync {
         slug: &str,
     ) -> Result<VirtualServiceRecord, CatalogError>;
 
-    /// Register a pRPM output as a new virtual service + dataset.
+    /// List virtual services, optionally filtered to those belonging to (or
+    /// attached to) one base service. `None` lists every virtual service.
+    async fn list_virtual_services(
+        &self,
+        service_id: Option<Uuid>,
+    ) -> Result<Vec<VirtualServiceRecord>, CatalogError>;
+
+    /// Register a pRPM output as a new virtual service + service.
     async fn register_output_service(
         &self,
-        output_dataset: DatasetRecord,
+        output_service: ServiceRecord,
         function_id: String,
         endpoint_slug: String,
     ) -> Result<VirtualServiceRecord, CatalogError>;
 
-    /// Hide a dataset (and any virtual services attached to or produced from
+    /// Hide a service (and any virtual services attached to or produced from
     /// it) from every read path immediately. The underlying rows/files are
     /// physically removed later by the purge job, or immediately via the
     /// admin purge-now override. Idempotent: calling it again on an
-    /// already-deleted dataset returns the original `deleted_at`.
-    async fn soft_delete_dataset(
+    /// already-deleted service returns the original `deleted_at`.
+    async fn soft_delete_service(
         &self,
-        dataset_id: Uuid,
+        service_id: Uuid,
         reason: Option<String>,
     ) -> Result<DeletionRecord, CatalogError>;
 
-    /// Like [`CatalogClient::get_dataset`] but ignores the soft-delete
+    /// Like [`CatalogClient::get_service`] but ignores the soft-delete
     /// tombstone. Used only by purge orchestration (scheduled job / immediate
-    /// override), which needs `storage_uri` for an already-hidden dataset in
+    /// override), which needs `storage_uri` for an already-hidden service in
     /// order to reclaim its S3 object.
-    async fn get_dataset_any(&self, id: Uuid) -> Result<DatasetRecord, CatalogError>;
+    async fn get_service_any(&self, id: Uuid) -> Result<ServiceRecord, CatalogError>;
 
-    /// Physically remove a soft-deleted dataset's catalog rows (Postgres +
+    /// Physically remove a soft-deleted service's catalog rows (Postgres +
     /// DuckLake) and mark its tombstone `purged_at`. Does **not** delete the
-    /// S3 object — the caller does that (via `get_dataset_any`'s
+    /// S3 object — the caller does that (via `get_service_any`'s
     /// `storage_uri`) before calling this, since object storage access isn't
-    /// a catalog-crate concern. Idempotent: safe to call again on a dataset
+    /// a catalog-crate concern. Idempotent: safe to call again on a service
     /// that's already fully purged.
-    async fn purge_dataset(&self, dataset_id: Uuid) -> Result<(), CatalogError>;
+    async fn purge_service(&self, service_id: Uuid) -> Result<(), CatalogError>;
 }
 
 /// Stub catalog client — returns empty results when Postgres/DuckLake are unavailable.
 pub struct StubCatalogClient {
     _config: Arc<CatalogConfig>,
     services: std::sync::Mutex<std::collections::HashMap<String, VirtualServiceRecord>>,
-    datasets: std::sync::Mutex<std::collections::HashMap<Uuid, DatasetRecord>>,
+    base_services: std::sync::Mutex<std::collections::HashMap<Uuid, ServiceRecord>>,
 }
 
 impl StubCatalogClient {
@@ -172,7 +179,7 @@ impl StubCatalogClient {
         Self {
             _config: config,
             services: std::sync::Mutex::new(std::collections::HashMap::new()),
-            datasets: std::sync::Mutex::new(std::collections::HashMap::new()),
+            base_services: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -181,24 +188,24 @@ impl StubCatalogClient {
 impl CatalogClient for StubCatalogClient {
     async fn insert_footprint(
         &self,
-        dataset: DatasetRecord,
+        service: ServiceRecord,
         _footprint: FootprintRecord,
     ) -> Result<Uuid, CatalogError> {
-        self.datasets
+        self.base_services
             .lock()
-            .expect("stub datasets lock")
-            .insert(dataset.id, dataset.clone());
-        Ok(dataset.id)
+            .expect("stub services lock")
+            .insert(service.id, service.clone());
+        Ok(service.id)
     }
 
-    async fn spatial_query(&self, _query: SpatialQuery) -> Result<Vec<DatasetRef>, CatalogError> {
+    async fn spatial_query(&self, _query: SpatialQuery) -> Result<Vec<ServiceRef>, CatalogError> {
         Ok(Vec::new())
     }
 
-    async fn get_dataset(&self, id: Uuid) -> Result<DatasetRecord, CatalogError> {
-        self.datasets
+    async fn get_service(&self, id: Uuid) -> Result<ServiceRecord, CatalogError> {
+        self.base_services
             .lock()
-            .expect("stub datasets lock")
+            .expect("stub services lock")
             .get(&id)
             .cloned()
             .ok_or(CatalogError::NotFound(id))
@@ -206,13 +213,13 @@ impl CatalogClient for StubCatalogClient {
 
     async fn attach_function(
         &self,
-        dataset_id: Uuid,
+        service_id: Uuid,
         function_id: String,
         params_defaults: serde_json::Value,
         endpoint_slug: Option<String>,
     ) -> Result<VirtualServiceRecord, CatalogError> {
-        let dataset = self.get_dataset(dataset_id).await?;
-        let slug = generate_service_slug(dataset_id, &function_id, endpoint_slug.as_deref());
+        let service = self.get_service(service_id).await?;
+        let slug = generate_service_slug(service_id, &function_id, endpoint_slug.as_deref());
         let mut services = self.services.lock().expect("stub services lock");
         if services.contains_key(&slug) {
             return Err(CatalogError::DuplicateSlug(slug));
@@ -221,8 +228,8 @@ impl CatalogClient for StubCatalogClient {
             id: Uuid::new_v4(),
             slug: slug.clone(),
             service_kind: VirtualServiceKind::Attached,
-            dataset_id: dataset.id,
-            parent_dataset_id: Some(dataset.id),
+            service_id: service.id,
+            parent_service_id: Some(service.id),
             function_id,
             params_defaults,
             created_at: Utc::now(),
@@ -244,9 +251,26 @@ impl CatalogClient for StubCatalogClient {
             .ok_or(CatalogError::ServiceNotFound(normalized))
     }
 
+    async fn list_virtual_services(
+        &self,
+        service_id: Option<Uuid>,
+    ) -> Result<Vec<VirtualServiceRecord>, CatalogError> {
+        Ok(self
+            .services
+            .lock()
+            .expect("stub services lock")
+            .values()
+            .filter(|record| match service_id {
+                Some(id) => record.service_id == id || record.parent_service_id == Some(id),
+                None => true,
+            })
+            .cloned()
+            .collect())
+    }
+
     async fn register_output_service(
         &self,
-        output_dataset: DatasetRecord,
+        output_service: ServiceRecord,
         function_id: String,
         endpoint_slug: String,
     ) -> Result<VirtualServiceRecord, CatalogError> {
@@ -255,16 +279,16 @@ impl CatalogClient for StubCatalogClient {
         if services.contains_key(&slug) {
             return Err(CatalogError::DuplicateSlug(slug));
         }
-        self.datasets
+        self.base_services
             .lock()
-            .expect("stub datasets lock")
-            .insert(output_dataset.id, output_dataset.clone());
+            .expect("stub services lock")
+            .insert(output_service.id, output_service.clone());
         let record = VirtualServiceRecord {
             id: Uuid::new_v4(),
             slug: slug.clone(),
             service_kind: VirtualServiceKind::Output,
-            dataset_id: output_dataset.id,
-            parent_dataset_id: None,
+            service_id: output_service.id,
+            parent_service_id: None,
             function_id,
             params_defaults: serde_json::json!({}),
             created_at: Utc::now(),
@@ -273,36 +297,36 @@ impl CatalogClient for StubCatalogClient {
         Ok(record)
     }
 
-    async fn soft_delete_dataset(
+    async fn soft_delete_service(
         &self,
-        dataset_id: Uuid,
+        service_id: Uuid,
         _reason: Option<String>,
     ) -> Result<DeletionRecord, CatalogError> {
-        self.datasets
+        self.base_services
             .lock()
-            .expect("stub datasets lock")
-            .get(&dataset_id)
+            .expect("stub services lock")
+            .get(&service_id)
             .cloned()
-            .ok_or(CatalogError::NotFound(dataset_id))?;
+            .ok_or(CatalogError::NotFound(service_id))?;
         let deleted_at = Utc::now();
         let purge_eligible_at =
             deleted_at + chrono::Duration::days(self._config.purge_retention_days as i64);
         Ok(DeletionRecord {
-            dataset_id,
+            service_id,
             deleted_at,
             purge_eligible_at,
         })
     }
 
-    async fn get_dataset_any(&self, id: Uuid) -> Result<DatasetRecord, CatalogError> {
-        self.get_dataset(id).await
+    async fn get_service_any(&self, id: Uuid) -> Result<ServiceRecord, CatalogError> {
+        self.get_service(id).await
     }
 
-    async fn purge_dataset(&self, dataset_id: Uuid) -> Result<(), CatalogError> {
-        self.datasets
+    async fn purge_service(&self, service_id: Uuid) -> Result<(), CatalogError> {
+        self.base_services
             .lock()
-            .expect("stub datasets lock")
-            .remove(&dataset_id);
+            .expect("stub services lock")
+            .remove(&service_id);
         Ok(())
     }
 }
@@ -313,21 +337,21 @@ mod tests {
     use geo_types::coord;
 
     #[test]
-    fn dataset_record_to_ref() {
-        let record = DatasetRecord {
+    fn service_record_to_ref() {
+        let record = ServiceRecord {
             id: Uuid::nil(),
             name: "test".into(),
             description: None,
-            format: DatasetFormat::Cog,
+            format: ServiceFormat::Cog,
             storage_uri: "s3://bucket/key".into(),
             crs: Some("EPSG:4326".into()),
             temporal_start: None,
             temporal_end: None,
             created_at: Utc::now(),
         };
-        let reference = record.to_dataset_ref();
+        let reference = record.to_service_ref();
         assert_eq!(reference.name, "test");
-        assert_eq!(reference.format, DatasetFormat::Cog);
+        assert_eq!(reference.format, ServiceFormat::Cog);
     }
 
     #[tokio::test]
@@ -346,11 +370,11 @@ mod tests {
         let catalog = PostgresDuckLakeCatalog::connect(config).await.expect("connect");
         let id = Uuid::new_v4();
         let now = Utc::now();
-        let dataset = DatasetRecord {
+        let service = ServiceRecord {
             id,
             name: "integration-test".into(),
-            description: Some("integration test dataset".into()),
-            format: DatasetFormat::Cog,
+            description: Some("integration test service".into()),
+            format: ServiceFormat::Cog,
             storage_uri: "s3://mantle-data/test.tif".into(),
             crs: Some("EPSG:4326".into()),
             temporal_start: Some(now),
@@ -358,18 +382,18 @@ mod tests {
             created_at: now,
         };
         let footprint = FootprintRecord {
-            dataset_id: id,
+            service_id: id,
             geometry_wkt: "POLYGON((-1 -1, -1 1, 1 1, 1 -1, -1 -1))".into(),
             cloud_cover: Some(10.0),
             partition_key: String::new(),
         };
 
         catalog
-            .insert_footprint(dataset.clone(), footprint)
+            .insert_footprint(service.clone(), footprint)
             .await
             .expect("insert");
 
-        let fetched = catalog.get_dataset(id).await.expect("get");
+        let fetched = catalog.get_service(id).await.expect("get");
         assert_eq!(fetched.name, "integration-test");
 
         let hits = catalog

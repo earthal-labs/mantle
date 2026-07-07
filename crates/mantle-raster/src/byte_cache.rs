@@ -8,7 +8,7 @@
 //! `read_range` call to get them). Left alone, a single tile request that
 //! spans a few source tiles ends up making a dozen-plus blocking network
 //! round trips, and every one of those round trips repeats on every request
-//! for the same dataset.
+//! for the same service.
 //!
 //! Caching at this level (below oxigdal, keyed by the exact byte range
 //! requested) fixes all of that in one place without having to reimplement

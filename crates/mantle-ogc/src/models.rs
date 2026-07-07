@@ -84,7 +84,7 @@ pub fn process_list() -> ProcessList {
             ProcessDescription {
                 id: "cube-slice".into(),
                 title: "Cube slice".into(),
-                description: "Extract a multidimensional slice from an Icechunk dataset.".into(),
+                description: "Extract a multidimensional slice from an Icechunk service.".into(),
                 version: "1.0.0".into(),
             },
             ProcessDescription {

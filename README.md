@@ -33,8 +33,8 @@ cp .env.example .env
 # 4. Health check
 curl http://localhost:8080/health
 
-# 5. Attach a vRPM and fetch a tile (requires a COG dataset_id)
-curl -X POST "http://localhost:8080/admin/services/{dataset_id}/attach" \
+# 5. Attach a vRPM and fetch a tile (requires a COG service_id)
+curl -X POST "http://localhost:8080/admin/services/{service_id}/attach" \
   -H "Authorization: Bearer ${MANTLE_ADMIN_TOKEN:-dev-admin-token}" \
   -H "Content-Type: application/json" \
   -d '{"function_id":"ndvi","params_defaults":{"red_band":1,"nir_band":2},"endpoint_slug":"sentinel-ndvi"}'
@@ -85,12 +85,12 @@ All routes are served by `mantle-api` unless noted. Admin routes require `Author
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Liveness / readiness |
-| GET | `/console` | Barebones dev console — STAC search, dataset admin, native Leaflet tile viewer, plugin listing, job submit/poll |
+| GET | `/console` | Barebones dev console — STAC search, service admin, native Leaflet tile viewer, plugin listing, job submit/poll |
 | GET | `/status/{job_id}` | Async job polling (`queued` → `running` → `succeeded` / `failed`) |
-| GET | `/datasets/{id}` | Dataset resource — name, description, format, CRS, extent, and available operation links |
-| GET | `/tiles/{z}/{x}/{y}` | Legacy tile shortcut (`?dataset_id`, `?band`, `?format`, `?render`) |
-| POST | `/admin/datasets/upload` | Multipart COG upload (field `file`) |
-| POST | `/admin/datasets/reference` | Register external S3/HTTPS URI (Virtual Zarr → Icechunk for NetCDF) |
+| GET | `/services/{id}` | Unified service resource — base service by UUID, or attached/output virtual service by slug |
+| GET | `/tiles/{z}/{x}/{y}` | Legacy tile shortcut (`?service_id`, `?band`, `?format`, `?render`) |
+| POST | `/admin/services/upload` | Multipart COG upload (field `file`) |
+| POST | `/admin/services/reference` | Register external S3/HTTPS URI (Virtual Zarr → Icechunk for NetCDF) |
 | GET | `/stac/` | STAC 1.0 landing page |
 | GET | `/stac/collections` | List collections |
 | GET | `/stac/collections/{id}` | Collection metadata |
@@ -185,7 +185,7 @@ Mantle is in **beta**: core paths work end-to-end in Docker Compose, but several
 | COG upload → STAC → OGC tile | Done | Requires fixture COG for live integration test |
 | vRPM (NDVI) virtual tiles | Done | Sidecar + attach API |
 | Redis Streams async jobs | Done | Ray + analytics-worker in compose |
-| pRPM `zonal_stats` | Beta | `params.values` or `dataset_refs` + band (stub read without rasterio) |
+| pRPM `zonal_stats` | Beta | `params.values` or `service_refs` + band (stub read without rasterio) |
 | Virtual Zarr → Icechunk ingestion | Stub | `virtualize.py` records target URI only |
 | DuckDB extensions (ducklake/spatial/postgres) | Ops | Documented in [operations.md](docs/operations.md); not bundled in API image |
 | Live integration tests in CI | Partial | Contract tests in CI; full flows `#[ignore]`; use `scripts/smoke.sh` after compose |

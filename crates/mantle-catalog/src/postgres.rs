@@ -1,47 +1,47 @@
 use crate::error::CatalogError;
-use crate::{DatasetRecord, FootprintRecord};
+use crate::{FootprintRecord, ServiceRecord};
 use chrono::{DateTime, Utc};
-use mantle_arrow::DatasetFormat;
+use mantle_arrow::ServiceFormat;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-pub(crate) fn format_to_db(format: DatasetFormat) -> &'static str {
+pub(crate) fn format_to_db(format: ServiceFormat) -> &'static str {
     match format {
-        DatasetFormat::Cog => "cog",
-        DatasetFormat::Icechunk => "icechunk",
+        ServiceFormat::Cog => "cog",
+        ServiceFormat::Icechunk => "icechunk",
     }
 }
 
-pub(crate) fn format_from_db(value: &str) -> DatasetFormat {
+pub(crate) fn format_from_db(value: &str) -> ServiceFormat {
     match value {
-        "cog" => DatasetFormat::Cog,
-        _ => DatasetFormat::Icechunk,
+        "cog" => ServiceFormat::Cog,
+        _ => ServiceFormat::Icechunk,
     }
 }
 
-pub(crate) async fn insert_dataset<'e, E>(
+pub(crate) async fn insert_service<'e, E>(
     executor: E,
-    dataset: &DatasetRecord,
+    service: &ServiceRecord,
 ) -> Result<(), CatalogError>
 where
     E: sqlx::PgExecutor<'e>,
 {
     sqlx::query(
         r#"
-        INSERT INTO datasets (id, name, description, format, storage_uri, crs, temporal_start, temporal_end, created_at)
+        INSERT INTO services (id, name, description, format, storage_uri, crs, temporal_start, temporal_end, created_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT (id) DO NOTHING
         "#,
     )
-    .bind(dataset.id)
-    .bind(&dataset.name)
-    .bind(&dataset.description)
-    .bind(format_to_db(dataset.format))
-    .bind(&dataset.storage_uri)
-    .bind(&dataset.crs)
-    .bind(dataset.temporal_start)
-    .bind(dataset.temporal_end)
-    .bind(dataset.created_at)
+    .bind(service.id)
+    .bind(&service.name)
+    .bind(&service.description)
+    .bind(format_to_db(service.format))
+    .bind(&service.storage_uri)
+    .bind(&service.crs)
+    .bind(service.temporal_start)
+    .bind(service.temporal_end)
+    .bind(service.created_at)
     .execute(executor)
     .await?;
     Ok(())
@@ -56,12 +56,12 @@ where
 {
     let row: (i64,) = sqlx::query_as(
         r#"
-        INSERT INTO footprints (dataset_id, geometry, cloud_cover, partition_key)
+        INSERT INTO footprints (service_id, geometry, cloud_cover, partition_key)
         VALUES ($1, ST_GeomFromText($2), $3, $4)
         RETURNING id
         "#,
     )
-    .bind(footprint.dataset_id)
+    .bind(footprint.service_id)
     .bind(&footprint.geometry_wkt)
     .bind(footprint.cloud_cover)
     .bind(&footprint.partition_key)
@@ -71,17 +71,17 @@ where
     Ok(row.0)
 }
 
-pub(crate) async fn fetch_dataset(
+pub(crate) async fn fetch_service(
     pool: &PgPool,
     id: Uuid,
-) -> Result<DatasetRecord, CatalogError> {
-    let row = sqlx::query_as::<_, DatasetRow>(
+) -> Result<ServiceRecord, CatalogError> {
+    let row = sqlx::query_as::<_, ServiceRow>(
         r#"
         SELECT id, name, description, format, storage_uri, crs, temporal_start, temporal_end, created_at
-        FROM datasets
+        FROM services
         WHERE id = $1
           AND NOT EXISTS (
-              SELECT 1 FROM dataset_deletions dd WHERE dd.dataset_id = datasets.id
+              SELECT 1 FROM service_deletions sd WHERE sd.service_id = services.id
           )
         "#,
     )
@@ -93,17 +93,17 @@ pub(crate) async fn fetch_dataset(
         .ok_or(CatalogError::NotFound(id))
 }
 
-/// Like [`fetch_dataset`] but ignores the soft-delete tombstone — used only by
-/// the purge routine, which legitimately needs to see a soft-deleted dataset's
+/// Like [`fetch_service`] but ignores the soft-delete tombstone — used only by
+/// the purge routine, which legitimately needs to see a soft-deleted service's
 /// `storage_uri` in order to reclaim it.
-pub(crate) async fn fetch_dataset_any(
+pub(crate) async fn fetch_service_any(
     pool: &PgPool,
     id: Uuid,
-) -> Result<DatasetRecord, CatalogError> {
-    let row = sqlx::query_as::<_, DatasetRow>(
+) -> Result<ServiceRecord, CatalogError> {
+    let row = sqlx::query_as::<_, ServiceRow>(
         r#"
         SELECT id, name, description, format, storage_uri, crs, temporal_start, temporal_end, created_at
-        FROM datasets
+        FROM services
         WHERE id = $1
         "#,
     )
@@ -116,7 +116,7 @@ pub(crate) async fn fetch_dataset_any(
 }
 
 #[derive(sqlx::FromRow)]
-struct DatasetRow {
+struct ServiceRow {
     id: Uuid,
     name: String,
     description: Option<String>,
@@ -128,8 +128,8 @@ struct DatasetRow {
     created_at: DateTime<Utc>,
 }
 
-impl From<DatasetRow> for DatasetRecord {
-    fn from(row: DatasetRow) -> Self {
+impl From<ServiceRow> for ServiceRecord {
+    fn from(row: ServiceRow) -> Self {
         Self {
             id: row.id,
             name: row.name,

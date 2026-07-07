@@ -50,7 +50,7 @@ pub struct CacheConfig {
     pub redis_url: String,
     pub ifd_ttl_seconds: u64,
     /// TTL for cached *encoded output tile* bytes (the render_tile result
-    /// cache in Redis, keyed by dataset(s)/z/x/y/band/render_rule/format).
+    /// cache in Redis, keyed by service(s)/z/x/y/band/render_rule/format).
     #[serde(default = "default_tile_ttl_seconds")]
     pub tile_ttl_seconds: u64,
     /// Max size of the in-process cache of raw byte ranges read from object

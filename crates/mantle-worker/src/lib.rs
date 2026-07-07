@@ -22,7 +22,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct DatasetRow {
+struct ServiceRow {
     id: Uuid,
     format: String,
     storage_uri: String,
@@ -30,7 +30,7 @@ struct DatasetRow {
 
 #[derive(Debug, Deserialize)]
 struct FootprintNotifyPayload {
-    dataset_id: Uuid,
+    service_id: Uuid,
     #[serde(default)]
     format: Option<String>,
     #[serde(default)]
@@ -81,7 +81,7 @@ impl CacheWarmer {
         info!(channel = FOOTPRINT_INSERTED_CHANNEL, "listening for footprint inserts");
 
         // Separate connection from `self.pool`: this one owns the DuckLake
-        // session needed to physically reclaim a purged dataset's Parquet file.
+        // session needed to physically reclaim a purged service's Parquet file.
         let catalog: Arc<dyn CatalogClient> = Arc::new(
             PostgresDuckLakeCatalog::connect(Arc::new(self.config.catalog.clone())).await?,
         );
@@ -91,7 +91,7 @@ impl CacheWarmer {
         info!(
             retention_days = self.config.catalog.purge_retention_days,
             poll_interval_seconds = self.config.catalog.purge_poll_interval_seconds,
-            "scheduled dataset purge enabled"
+            "scheduled service purge enabled"
         );
 
         loop {
@@ -124,14 +124,14 @@ impl CacheWarmer {
         Ok(())
     }
 
-    /// Purge any datasets whose soft-delete retention window has elapsed.
+    /// Purge any services whose soft-delete retention window has elapsed.
     /// Logs and continues past individual failures so one bad row doesn't
     /// block the rest of the batch or the next tick.
     async fn run_purge_tick(&self, catalog: &dyn CatalogClient) {
         let retention_days = self.config.catalog.purge_retention_days as i32;
         let rows: Result<Vec<(Uuid,)>, sqlx::Error> = sqlx::query_as(
             r#"
-            SELECT dataset_id FROM dataset_deletions
+            SELECT service_id FROM service_deletions
             WHERE deleted_at < now() - make_interval(days => $1)
               AND purged_at IS NULL
             LIMIT 20
@@ -144,91 +144,91 @@ impl CacheWarmer {
         let rows = match rows {
             Ok(rows) => rows,
             Err(err) => {
-                error!(error = %err, "failed to query purge-eligible datasets");
+                error!(error = %err, "failed to query purge-eligible services");
                 return;
             }
         };
 
-        for (dataset_id,) in rows {
-            if let Err(err) = self.purge_one(catalog, dataset_id).await {
-                error!(%dataset_id, error = %err, "purge failed, will retry next tick");
+        for (service_id,) in rows {
+            if let Err(err) = self.purge_one(catalog, service_id).await {
+                error!(%service_id, error = %err, "purge failed, will retry next tick");
             }
         }
     }
 
-    async fn purge_one(&self, catalog: &dyn CatalogClient, dataset_id: Uuid) -> anyhow::Result<()> {
-        let dataset = catalog.get_dataset_any(dataset_id).await?;
-        let (_bucket, key) = parse_storage_uri(&dataset.storage_uri, &self.config.storage.bucket)?;
+    async fn purge_one(&self, catalog: &dyn CatalogClient, service_id: Uuid) -> anyhow::Result<()> {
+        let service = catalog.get_service_any(service_id).await?;
+        let (_bucket, key) = parse_storage_uri(&service.storage_uri, &self.config.storage.bucket)?;
         let path = object_path(&key);
         match self.store.delete(&path).await {
             Ok(()) => {}
             Err(object_store::Error::NotFound { .. }) => {}
             Err(err) => return Err(err.into()),
         }
-        catalog.purge_dataset(dataset_id).await?;
-        info!(%dataset_id, "dataset purged by scheduled job");
+        catalog.purge_service(service_id).await?;
+        info!(%service_id, "service purged by scheduled job");
         Ok(())
     }
 
     async fn handle_notification(&self, payload: &str) -> anyhow::Result<()> {
         let notify: FootprintNotifyPayload = serde_json::from_str(payload)
             .unwrap_or(FootprintNotifyPayload {
-                dataset_id: Uuid::parse_str(payload.trim()).map_err(|err| {
+                service_id: Uuid::parse_str(payload.trim()).map_err(|err| {
                     anyhow::anyhow!("invalid footprint notify payload: {payload}: {err}")
                 })?,
                 format: None,
                 storage_uri: None,
             });
 
-        let dataset = if notify.format.is_some() && notify.storage_uri.is_some() {
-            DatasetRow {
-                id: notify.dataset_id,
+        let service = if notify.format.is_some() && notify.storage_uri.is_some() {
+            ServiceRow {
+                id: notify.service_id,
                 format: notify.format.expect("checked some"),
                 storage_uri: notify.storage_uri.expect("checked some"),
             }
         } else {
-            self.load_dataset(notify.dataset_id).await?
+            self.load_service(notify.service_id).await?
         };
 
-        self.warm_dataset(&dataset).await
+        self.warm_service(&service).await
     }
 
-    async fn load_dataset(&self, dataset_id: Uuid) -> anyhow::Result<DatasetRow> {
-        let row = sqlx::query_as::<_, DatasetRow>(
-            r#"SELECT id, format, storage_uri FROM datasets WHERE id = $1"#,
+    async fn load_service(&self, service_id: Uuid) -> anyhow::Result<ServiceRow> {
+        let row = sqlx::query_as::<_, ServiceRow>(
+            r#"SELECT id, format, storage_uri FROM services WHERE id = $1"#,
         )
-        .bind(dataset_id)
+        .bind(service_id)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("dataset not found: {dataset_id}"))?;
+        .ok_or_else(|| anyhow::anyhow!("service not found: {service_id}"))?;
 
         Ok(row)
     }
 
-    async fn warm_dataset(&self, dataset: &DatasetRow) -> anyhow::Result<()> {
+    async fn warm_service(&self, service: &ServiceRow) -> anyhow::Result<()> {
         let ttl = self.config.cache.ifd_ttl_seconds;
-        match dataset.format.as_str() {
+        match service.format.as_str() {
             "cog" => {
                 // Tile rendering (mantle-raster::cog) reads COGs via oxigdal,
                 // which needs random byte-range access to the whole file, not
                 // a cached IFD-bytes prefix — nothing reads this cache
                 // anymore, so there's nothing useful to pre-warm here.
-                debug!(dataset_id = %dataset.id, "skipping COG IFD cache warm (unused by oxigdal-based rendering)");
+                debug!(service_id = %service.id, "skipping COG IFD cache warm (unused by oxigdal-based rendering)");
             }
             "icechunk" => {
-                let repo_id = dataset.id.to_string();
-                info!(dataset_id = %dataset.id, repo_id, "warming Icechunk zmetadata cache");
+                let repo_id = service.id.to_string();
+                info!(service_id = %service.id, repo_id, "warming Icechunk zmetadata cache");
                 let blob = fetch_zmetadata_blob(
                     self.store.clone(),
-                    &dataset.storage_uri,
+                    &service.storage_uri,
                     &self.config.storage.bucket,
                 )
                 .await?;
                 self.cache.set_zmetadata(&repo_id, &blob, ttl).await?;
-                info!(dataset_id = %dataset.id, bytes = blob.len(), "zmetadata cached");
+                info!(service_id = %service.id, bytes = blob.len(), "zmetadata cached");
             }
             other => {
-                warn!(dataset_id = %dataset.id, format = other, "skipping unknown dataset format");
+                warn!(service_id = %service.id, format = other, "skipping unknown service format");
             }
         }
         Ok(())

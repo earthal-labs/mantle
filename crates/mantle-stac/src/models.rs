@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Mantle's single STAC collection id — all catalog datasets are exposed here.
+/// Mantle's single STAC collection id — all catalog services are exposed here.
 pub const DEFAULT_COLLECTION_ID: &str = "mantle";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,8 +88,8 @@ pub fn default_collection() -> StacCollection {
         type_: "Collection".into(),
         stac_version: "1.0.0".into(),
         id: DEFAULT_COLLECTION_ID.into(),
-        title: "Mantle Datasets".into(),
-        description: "Raster datasets registered in the Mantle catalog (COG and Icechunk).".into(),
+        title: "Mantle Services".into(),
+        description: "Raster services registered in the Mantle catalog (COG and Icechunk).".into(),
         license: "proprietary".into(),
         links: vec![
             link(

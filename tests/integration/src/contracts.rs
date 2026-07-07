@@ -1,8 +1,8 @@
 //! Frozen contract assertions from `AGENTS.md` (no live services required).
 
 use mantle_arrow::{
-    decode_dataset_refs, encode_dataset_ref, encode_job_spec, encode_tile_request, DatasetFormat,
-    DatasetRef, JobSpec, TileRequest,
+    decode_service_refs, encode_job_spec, encode_service_ref, encode_tile_request, JobSpec,
+    ServiceFormat, ServiceRef, TileRequest,
 };
 use mantle_cache::{
     ifd_key, tile_key, zmeta_key, IFD_KEY_PREFIX, JOBS_STREAM_KEY, TILE_KEY_PREFIX,
@@ -17,10 +17,10 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("GET", "/health"),
     ("GET", "/status/{job_id}"),
     ("GET", "/tiles/{z}/{x}/{y}"),
-    ("POST", "/admin/datasets/upload"),
-    ("POST", "/admin/datasets/reference"),
-    ("POST", "/admin/services/{dataset_id}/attach"),
-    ("GET", "/services/{slug}"),
+    ("POST", "/admin/services/upload"),
+    ("POST", "/admin/services/reference"),
+    ("POST", "/admin/services/{service_id}/attach"),
+    ("GET", "/services/{id}"),
     ("GET", "/services/{slug}/tiles/{z}/{x}/{y}"),
     ("GET", "/plugins"),
     ("GET", "/plugins/{plugin_id}"),
@@ -47,12 +47,12 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("POST", "/ogc/processes/{process_id}/execution"),
 ];
 
-pub fn sample_dataset_ref() -> DatasetRef {
-    DatasetRef {
+pub fn sample_service_ref() -> ServiceRef {
+    ServiceRef {
         id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap(),
         name: "contract-fixture".into(),
-        format: DatasetFormat::Cog,
-        storage_uri: "s3://mantle-data/datasets/contract.tif".into(),
+        format: ServiceFormat::Cog,
+        storage_uri: "s3://mantle-data/services/contract.tif".into(),
         crs: Some("EPSG:4326".into()),
         geometry_wkt: None,
     }
@@ -63,7 +63,7 @@ pub fn assert_redis_key_contract() {
     assert_eq!(ZMETA_KEY_PREFIX, "mantle:zmeta:");
     assert_eq!(TILE_KEY_PREFIX, "mantle:tile:");
     assert_eq!(JOBS_STREAM_KEY, "mantle:jobs");
-    assert_eq!(ifd_key("datasets/foo.tif"), "mantle:ifd:datasets/foo.tif");
+    assert_eq!(ifd_key("services/foo.tif"), "mantle:ifd:services/foo.tif");
     assert_eq!(
         zmeta_key("repo-abc"),
         "mantle:zmeta:repo-abc"
@@ -75,14 +75,14 @@ pub fn assert_redis_key_contract() {
 }
 
 pub fn assert_arrow_round_trip() {
-    let dataset = sample_dataset_ref();
-    let encoded = encode_dataset_ref(&dataset).expect("encode dataset");
-    let decoded = decode_dataset_refs(&encoded).expect("decode dataset");
+    let service = sample_service_ref();
+    let encoded = encode_service_ref(&service).expect("encode service");
+    let decoded = decode_service_refs(&encoded).expect("decode service");
     assert_eq!(decoded.len(), 1);
-    assert_eq!(decoded[0], dataset);
+    assert_eq!(decoded[0], service);
 
     let tile = TileRequest {
-        dataset_id: dataset.id,
+        service_id: service.id,
         z: 10,
         x: 512,
         y: 384,
@@ -95,7 +95,7 @@ pub fn assert_arrow_round_trip() {
     let job = JobSpec {
         job_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
         process_id: "ndvi".into(),
-        dataset_refs: vec![dataset],
+        service_refs: vec![service],
         params: serde_json::json!({"red_band": 1, "nir_band": 2}),
         submitted_at: Utc::now(),
     };
@@ -118,7 +118,7 @@ pub fn assert_route_table_covers_agents_md() {
     let required = [
         "/health",
         "/status/",
-        "/admin/datasets/upload",
+        "/admin/services/upload",
         "/stac/search",
         "/ogc/tiles/",
         "/ogc/processes/",

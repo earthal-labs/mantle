@@ -71,16 +71,16 @@ def test_zonal_stats_plugin_returns_data_without_storage_paths() -> None:
     assert "s3://" not in serialized
 
 
-def test_zonal_stats_reads_band_from_dataset_refs_stub() -> None:
+def test_zonal_stats_reads_band_from_service_refs_stub() -> None:
     job = get_prpm_model("zonal_stats")
     inputs = JobInputs(
         params={"band": 1},
-        dataset_refs=[
+        service_refs=[
             {
                 "id": "550e8400-e29b-41d4-a716-446655440001",
                 "name": "fixture",
                 "format": "cog",
-                "storage_uri": "s3://mantle-data/datasets/fixture.tif",
+                "storage_uri": "s3://mantle-data/services/fixture.tif",
             }
         ],
     )

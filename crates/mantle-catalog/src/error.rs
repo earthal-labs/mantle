@@ -5,7 +5,7 @@ use uuid::Uuid;
 pub enum CatalogError {
     #[error("catalog not implemented: {0}")]
     NotImplemented(String),
-    #[error("dataset not found: {0}")]
+    #[error("service not found: {0}")]
     NotFound(Uuid),
     #[error("configuration error: {0}")]
     Config(String),

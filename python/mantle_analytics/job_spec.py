@@ -22,7 +22,7 @@ JOB_SPEC_SCHEMA = pa.schema(
 
 
 @dataclass
-class DatasetRef:
+class ServiceRef:
     id: str
     name: str
     format: str
@@ -30,7 +30,7 @@ class DatasetRef:
     crs: str | None = None
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> DatasetRef:
+    def from_dict(cls, raw: dict[str, Any]) -> ServiceRef:
         return cls(
             id=str(raw["id"]),
             name=str(raw["name"]),
@@ -46,7 +46,7 @@ class JobSpec:
     process_id: str
     params: dict[str, Any]
     submitted_at: datetime
-    dataset_refs: list[DatasetRef] = field(default_factory=list)
+    service_refs: list[ServiceRef] = field(default_factory=list)
 
 
 def decode_job_spec(payload: bytes) -> JobSpec:
@@ -62,11 +62,11 @@ def decode_job_spec(payload: bytes) -> JobSpec:
     submitted_raw = batch.column("submitted_at")[0].as_py()
 
     params: dict[str, Any] = json.loads(params_raw) if params_raw else {}
-    dataset_refs: list[DatasetRef] = []
-    if "dataset_refs" in params:
-        refs = params.pop("dataset_refs")
+    service_refs: list[ServiceRef] = []
+    if "service_refs" in params:
+        refs = params.pop("service_refs")
         if isinstance(refs, list):
-            dataset_refs = [DatasetRef.from_dict(item) for item in refs]
+            service_refs = [ServiceRef.from_dict(item) for item in refs]
 
     submitted_at = datetime.fromisoformat(submitted_raw.replace("Z", "+00:00"))
 
@@ -75,15 +75,15 @@ def decode_job_spec(payload: bytes) -> JobSpec:
         process_id=process_id,
         params=params,
         submitted_at=submitted_at,
-        dataset_refs=dataset_refs,
+        service_refs=service_refs,
     )
 
 
 def encode_job_spec(job: JobSpec) -> bytes:
     """Encode a JobSpec as Arrow IPC (for tests and round-trip validation)."""
     params = dict(job.params)
-    if job.dataset_refs:
-        params["dataset_refs"] = [
+    if job.service_refs:
+        params["service_refs"] = [
             {
                 "id": ref.id,
                 "name": ref.name,
@@ -91,7 +91,7 @@ def encode_job_spec(job: JobSpec) -> bytes:
                 "storage_uri": ref.storage_uri,
                 "crs": ref.crs,
             }
-            for ref in job.dataset_refs
+            for ref in job.service_refs
         ]
 
     batch = pa.RecordBatch.from_arrays(

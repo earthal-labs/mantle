@@ -1,24 +1,24 @@
 use crate::models::{link, StacItem, StacItemCollection, DEFAULT_COLLECTION_ID};
-use mantle_arrow::{DatasetFormat, DatasetRef};
+use mantle_arrow::{ServiceFormat, ServiceRef};
 
-pub fn datasets_to_stac_items(datasets: &[DatasetRef]) -> Vec<StacItem> {
-    datasets
+pub fn services_to_stac_items(services: &[ServiceRef]) -> Vec<StacItem> {
+    services
         .iter()
-        .map(dataset_to_stac_item)
+        .map(service_to_stac_item)
         .collect()
 }
 
-pub fn dataset_to_stac_item(dataset: &DatasetRef) -> StacItem {
+pub fn service_to_stac_item(service: &ServiceRef) -> StacItem {
     let item_path = format!(
         "/stac/collections/{DEFAULT_COLLECTION_ID}/items/{}",
-        dataset.id
+        service.id
     );
-    let format_str = match dataset.format {
-        DatasetFormat::Cog => "cog",
-        DatasetFormat::Icechunk => "icechunk",
+    let format_str = match service.format {
+        ServiceFormat::Cog => "cog",
+        ServiceFormat::Icechunk => "icechunk",
     };
 
-    let (bbox, geometry) = dataset
+    let (bbox, geometry) = service
         .geometry_wkt
         .as_deref()
         .and_then(polygon_wkt_to_geojson)
@@ -28,21 +28,21 @@ pub fn dataset_to_stac_item(dataset: &DatasetRef) -> StacItem {
     StacItem {
         type_: "Feature".into(),
         stac_version: "1.0.0".into(),
-        id: dataset.id.to_string(),
+        id: service.id.to_string(),
         collection: DEFAULT_COLLECTION_ID.into(),
         geometry,
         bbox,
         properties: serde_json::json!({
-            "title": dataset.name,
+            "title": service.name,
             "mantle:format": format_str,
-            "proj:epsg": dataset.crs,
+            "proj:epsg": service.crs,
         }),
         assets: serde_json::json!({
             "data": {
-                "href": dataset.storage_uri,
+                "href": service.storage_uri,
                 "roles": ["data"],
-                "title": dataset.name,
-                "type": asset_media_type(dataset.format),
+                "title": service.name,
+                "type": asset_media_type(service.format),
             }
         }),
         links: vec![
@@ -109,10 +109,10 @@ fn polygon_wkt_to_geojson(wkt: &str) -> Option<(Vec<f64>, serde_json::Value)> {
     Some((bbox, geometry))
 }
 
-fn asset_media_type(format: DatasetFormat) -> &'static str {
+fn asset_media_type(format: ServiceFormat) -> &'static str {
     match format {
-        DatasetFormat::Cog => "image/tiff; application=geotiff; profile=cloud-optimized",
-        DatasetFormat::Icechunk => "application/vnd+zarr",
+        ServiceFormat::Cog => "image/tiff; application=geotiff; profile=cloud-optimized",
+        ServiceFormat::Icechunk => "application/vnd+zarr",
     }
 }
 
@@ -158,14 +158,14 @@ pub fn build_collection_items(features: Vec<StacItem>, collection_id: &str) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mantle_arrow::DatasetFormat;
+    use mantle_arrow::ServiceFormat;
     use uuid::Uuid;
 
-    fn sample_dataset() -> DatasetRef {
-        DatasetRef {
+    fn sample_service() -> ServiceRef {
+        ServiceRef {
             id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
             name: "sentinel-2-tile".into(),
-            format: DatasetFormat::Cog,
+            format: ServiceFormat::Cog,
             storage_uri: "s3://mantle-data/tiles/s2.tif".into(),
             crs: Some("EPSG:4326".into()),
             geometry_wkt: None,
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn stac_item_has_required_fields() {
-        let item = dataset_to_stac_item(&sample_dataset());
+        let item = service_to_stac_item(&sample_service());
         assert_eq!(item.type_, "Feature");
         assert_eq!(item.stac_version, "1.0.0");
         assert_eq!(item.collection, DEFAULT_COLLECTION_ID);
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn stac_item_asset_points_to_storage_uri() {
-        let item = dataset_to_stac_item(&sample_dataset());
+        let item = service_to_stac_item(&sample_service());
         let assets = item.assets.as_object().expect("assets object");
         let data = assets.get("data").expect("data asset");
         assert_eq!(
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn stac_item_serializes_to_geojson_shape() {
-        let item = dataset_to_stac_item(&sample_dataset());
+        let item = service_to_stac_item(&sample_service());
         let json = serde_json::to_value(&item).expect("serialize");
         assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("Feature"));
         assert!(json.get("stac_version").is_some());
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn item_collection_includes_context_fields() {
-        let features = datasets_to_stac_items(&[sample_dataset()]);
+        let features = services_to_stac_items(&[sample_service()]);
         let collection = build_item_collection(features, 1);
         assert_eq!(collection.type_, "FeatureCollection");
         assert_eq!(collection.number_matched, Some(1));
@@ -214,18 +214,18 @@ mod tests {
 
     #[test]
     fn stac_item_has_null_bbox_geometry_without_footprint() {
-        let item = dataset_to_stac_item(&sample_dataset());
+        let item = service_to_stac_item(&sample_service());
         assert!(item.bbox.is_none());
         assert!(item.geometry.is_none());
     }
 
     #[test]
     fn stac_item_derives_bbox_and_geometry_from_wkt() {
-        let mut dataset = sample_dataset();
-        dataset.geometry_wkt =
+        let mut service = sample_service();
+        service.geometry_wkt =
             Some("POLYGON ((-10 -5, -10 5, 10 5, 10 -5, -10 -5))".to_string());
 
-        let item = dataset_to_stac_item(&dataset);
+        let item = service_to_stac_item(&service);
         assert_eq!(item.bbox, Some(vec![-10.0, -5.0, 10.0, 5.0]));
         let geometry = item.geometry.expect("geometry present");
         assert_eq!(geometry.get("type").and_then(|v| v.as_str()), Some("Polygon"));

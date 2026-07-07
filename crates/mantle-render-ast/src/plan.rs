@@ -3,7 +3,7 @@
 use crate::ast::{BandRefKey, Expr};
 use crate::parse::{collect_band_refs, contains_delegate_to_ray, contains_mosaic};
 use chrono::Utc;
-use mantle_arrow::{encode_job_spec, ArrowError, DatasetRef, JobSpec};
+use mantle_arrow::{encode_job_spec, ArrowError, JobSpec, ServiceRef};
 use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
@@ -14,7 +14,7 @@ use uuid::Uuid;
 pub enum ExecutionTarget {
     /// Per-pixel SIMD ops via oxigdal / local tile path.
     SimdLocal,
-    /// Multi-dataset mosaic via parallel byte-range reads.
+    /// Multi-service mosaic via parallel byte-range reads.
     MosaicParallel,
     /// Heavy ops delegated to Ray analytics workers.
     RayAsync,
@@ -77,7 +77,7 @@ pub enum PlanError {
 /// Build a [`JobSpec`] and Arrow IPC bytes for Ray delegation.
 pub fn plan_ray_job(
     expr: &Expr,
-    datasets: Vec<DatasetRef>,
+    services: Vec<ServiceRef>,
 ) -> Result<(JobSpec, Vec<u8>), PlanError> {
     let Expr::DelegateToRay {
         process_id,
@@ -90,7 +90,7 @@ pub fn plan_ray_job(
     let job = JobSpec {
         job_id: Uuid::new_v4(),
         process_id: process_id.clone(),
-        dataset_refs: datasets,
+        service_refs: services,
         params: params.clone(),
         submitted_at: Utc::now(),
     };
@@ -108,7 +108,7 @@ mod tests {
     fn simd_local_for_band_math() {
         let id = Uuid::new_v4();
         let json = format!(
-            r#"{{"type":"binary_op","op":"add","left":{{"type":"band_ref","dataset_id":"{id}","band":1}},"right":{{"type":"literal","value":1.0}}}}"#,
+            r#"{{"type":"binary_op","op":"add","left":{{"type":"band_ref","service_id":"{id}","band":1}},"right":{{"type":"literal","value":1.0}}}}"#,
         );
         let expr = parse_render_rule(&json).unwrap();
         assert_eq!(execution_target(&expr), ExecutionTarget::SimdLocal);
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn mosaic_parallel_for_mosaic_node() {
-        let json = r#"{"type":"mosaic","dataset_filter":{"format":"cog"},"reducer":"mean"}"#;
+        let json = r#"{"type":"mosaic","service_filter":{"format":"cog"},"reducer":"mean"}"#;
         let expr = parse_render_rule(json).unwrap();
         assert_eq!(execution_target(&expr), ExecutionTarget::MosaicParallel);
         assert_eq!(
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn nested_mosaic_promotes_tree_to_mosaic_parallel() {
-        let json = r#"{"type":"colormap","expr":{"type":"mosaic","dataset_filter":{},"reducer":"max"},"lut_id":"viridis"}"#;
+        let json = r#"{"type":"colormap","expr":{"type":"mosaic","service_filter":{},"reducer":"max"},"lut_id":"viridis"}"#;
         let expr = parse_render_rule(json).unwrap();
         assert_eq!(execution_target(&expr), ExecutionTarget::MosaicParallel);
         assert_eq!(node_execution_target(&expr), ExecutionTarget::SimdLocal);

@@ -6,9 +6,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS datasets_no_update ON datasets;
-CREATE TRIGGER datasets_no_update
-    BEFORE UPDATE OR DELETE ON datasets
+DROP TRIGGER IF EXISTS services_no_update ON services;
+CREATE TRIGGER services_no_update
+    BEFORE UPDATE OR DELETE ON services
     FOR EACH ROW EXECUTE PROCEDURE mantle_reject_mutation();
 
 DROP TRIGGER IF EXISTS footprints_no_update ON footprints;
@@ -22,7 +22,7 @@ BEGIN
         'mantle_footprint_insert',
         json_build_object(
             'footprint_id', NEW.id,
-            'dataset_id', NEW.dataset_id,
+            'service_id', NEW.service_id,
             'partition_key', NEW.partition_key
         )::text
     );

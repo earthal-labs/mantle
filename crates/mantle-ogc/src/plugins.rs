@@ -23,7 +23,7 @@ pub enum ParamType {
     Number,
     String,
     Boolean,
-    Dataset,
+    Service,
     StringList,
     NumberList,
     OutputJson,
@@ -191,9 +191,9 @@ fn validate_param_value(spec: &ParameterSpec, value: &Value) -> Result<(), Plugi
                 return Err(invalid("must be a boolean"));
             }
         }
-        ParamType::Dataset => {
+        ParamType::Service => {
             if !value.is_string() || value.as_str().unwrap_or("").trim().is_empty() {
-                return Err(invalid("must be a dataset UUID string"));
+                return Err(invalid("must be a service UUID string"));
             }
         }
         ParamType::StringList => {

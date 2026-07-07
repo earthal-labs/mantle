@@ -23,7 +23,7 @@ class ParamType(str, Enum):
     NUMBER = "number"
     STRING = "string"
     BOOLEAN = "boolean"
-    DATASET = "dataset"
+    SERVICE = "service"
     STRING_LIST = "string_list"
     NUMBER_LIST = "number_list"
     OUTPUT_JSON = "output_json"
@@ -193,9 +193,9 @@ def validate_params_against_specs(
             case ParamType.BOOLEAN:
                 if not isinstance(value, bool):
                     raise ValueError(f"{spec.name} must be a boolean")
-            case ParamType.DATASET:
+            case ParamType.SERVICE:
                 if not isinstance(value, str) or not value.strip():
-                    raise ValueError(f"{spec.name} must be a dataset UUID string")
+                    raise ValueError(f"{spec.name} must be a service UUID string")
             case ParamType.STRING_LIST:
                 if not isinstance(value, list) or not all(
                     isinstance(item, str) for item in value

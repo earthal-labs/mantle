@@ -7,9 +7,9 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VirtualServiceKind {
-    /// On-the-fly function attached to an existing dataset (no data copy).
+    /// On-the-fly function attached to an existing service (no data copy).
     Attached,
-    /// New output dataset produced by a pRPM job.
+    /// New output service produced by a pRPM job.
     Output,
 }
 
@@ -18,10 +18,10 @@ pub struct VirtualServiceRecord {
     pub id: Uuid,
     pub slug: String,
     pub service_kind: VirtualServiceKind,
-    /// For attached: parent dataset. For output: the output dataset.
-    pub dataset_id: Uuid,
-    /// Parent dataset when service_kind is Attached.
-    pub parent_dataset_id: Option<Uuid>,
+    /// For attached: parent service. For output: the output service.
+    pub service_id: Uuid,
+    /// Parent service when service_kind is Attached.
+    pub parent_service_id: Option<Uuid>,
     pub function_id: String,
     pub params_defaults: serde_json::Value,
     pub created_at: DateTime<Utc>,
@@ -47,12 +47,12 @@ pub fn sanitize_slug(raw: &str) -> String {
     }
 }
 
-/// Generate a default slug from dataset id prefix and function id.
-pub fn generate_service_slug(dataset_id: Uuid, function_id: &str, custom: Option<&str>) -> String {
+/// Generate a default slug from service id prefix and function id.
+pub fn generate_service_slug(service_id: Uuid, function_id: &str, custom: Option<&str>) -> String {
     if let Some(slug) = custom {
         return sanitize_slug(slug);
     }
-    let prefix = &dataset_id.to_string()[..8];
+    let prefix = &service_id.to_string()[..8];
     let func = function_id.replace('_', "-");
     sanitize_slug(&format!("{prefix}-{func}"))
 }

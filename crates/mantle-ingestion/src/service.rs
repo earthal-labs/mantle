@@ -2,14 +2,14 @@
 
 use crate::metadata::harvest_from_bytes;
 use crate::storage::{
-    build_object_store, dataset_object_key, storage_uri, upload_stream_with_header_peek,
+    build_object_store, service_object_key, storage_uri, upload_stream_with_header_peek,
 };
 use crate::{IngestionError, UploadRequest};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::Stream;
-use mantle_arrow::DatasetFormat;
-use mantle_catalog::{CatalogClient, DatasetRecord, FootprintRecord};
+use mantle_arrow::ServiceFormat;
+use mantle_catalog::{CatalogClient, FootprintRecord, ServiceRecord};
 use mantle_config::{AnalyticsConfig, StorageConfig};
 use object_store::ObjectStore;
 use std::sync::Arc;
@@ -53,32 +53,32 @@ impl MantleIngestionService {
             .filename
             .clone()
             .unwrap_or_else(|| format!("{id}.tif"));
-        let key = dataset_object_key(id, &filename);
+        let key = service_object_key(id, &filename);
         let uri = storage_uri(&self.storage.bucket, &key);
 
         let (uploaded_bytes, header_peek) =
             upload_stream_with_header_peek(self.store.clone(), &key, stream).await?;
-        info!(dataset_id = %id, key = %key, bytes = uploaded_bytes, "uploaded dataset to S3");
+        info!(service_id = %id, key = %key, bytes = uploaded_bytes, "uploaded service to S3");
 
-        self.register_uploaded_dataset_with_id(request, uri, header_peek, id)
+        self.register_uploaded_service_with_id(request, uri, header_peek, id)
             .await
     }
 
-    /// Register a dataset whose bytes are already stored at `storage_uri`.
-    pub async fn register_uploaded_dataset_with_id(
+    /// Register a service whose bytes are already stored at `storage_uri`.
+    pub async fn register_uploaded_service_with_id(
         &self,
         request: UploadRequest,
         storage_uri: String,
         header_peek: Vec<u8>,
-        dataset_id: Uuid,
+        service_id: Uuid,
     ) -> Result<Uuid, IngestionError> {
         let spatial = harvest_from_bytes(&header_peek, &request.content_type)?;
         insert_catalog_record(
             self.catalog.as_ref(),
-            dataset_id,
+            service_id,
             request.name,
             request.description,
-            DatasetFormat::Cog,
+            ServiceFormat::Cog,
             storage_uri,
             spatial,
         )
@@ -92,12 +92,12 @@ pub(crate) async fn insert_catalog_record(
     id: Uuid,
     name: String,
     description: Option<String>,
-    format: DatasetFormat,
+    format: ServiceFormat,
     storage_uri: String,
     spatial: crate::metadata::SpatialMetadata,
 ) -> Result<Uuid, IngestionError> {
     let now = chrono::Utc::now();
-    let dataset = DatasetRecord {
+    let service = ServiceRecord {
         id,
         name,
         description,
@@ -109,28 +109,28 @@ pub(crate) async fn insert_catalog_record(
         created_at: now,
     };
     let footprint = FootprintRecord {
-        dataset_id: id,
+        service_id: id,
         geometry_wkt: spatial.geometry_wkt,
         cloud_cover: None,
         partition_key: String::new(),
     };
 
     catalog
-        .insert_footprint(dataset, footprint)
+        .insert_footprint(service, footprint)
         .await
         .map_err(IngestionError::from)
 }
 
 #[async_trait]
 impl crate::IngestionService for MantleIngestionService {
-    async fn register_uploaded_dataset(
+    async fn register_uploaded_service(
         &self,
         request: UploadRequest,
-        dataset_id: Uuid,
+        service_id: Uuid,
         storage_uri: String,
         header_peek: Vec<u8>,
     ) -> Result<Uuid, IngestionError> {
-        self.register_uploaded_dataset_with_id(request, storage_uri, header_peek, dataset_id)
+        self.register_uploaded_service_with_id(request, storage_uri, header_peek, service_id)
             .await
     }
 

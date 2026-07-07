@@ -15,7 +15,7 @@ pub struct HealthResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct IngestionResponse {
-    pub dataset_id: Uuid,
+    pub service_id: Uuid,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,7 +76,7 @@ pub async fn upload_cog_fixture(name: &str, cog_path: &Path) -> Uuid {
         .expect("mime");
     let form = Form::new().text("name", name.to_string()).part("file", part);
 
-    let url = format!("{}/admin/datasets/upload", env::api_base_url());
+    let url = format!("{}/admin/services/upload", env::api_base_url());
     let resp = http_client()
         .post(&url)
         .header(AUTHORIZATION, format!("Bearer {}", admin_token()))
@@ -92,11 +92,11 @@ pub async fn upload_cog_fixture(name: &str, cog_path: &Path) -> Uuid {
     );
     let body: IngestionResponse =
         serde_json::from_str(&body_text).expect("upload json");
-    body.dataset_id
+    body.service_id
 }
 
 pub async fn register_cloud_reference(name: &str, storage_uri: &str) -> Uuid {
-    let url = format!("{}/admin/datasets/reference", env::api_base_url());
+    let url = format!("{}/admin/services/reference", env::api_base_url());
     let resp = http_client()
         .post(&url)
         .header(AUTHORIZATION, format!("Bearer {}", admin_token()))
@@ -116,7 +116,7 @@ pub async fn register_cloud_reference(name: &str, storage_uri: &str) -> Uuid {
     );
     let body: IngestionResponse =
         serde_json::from_str(&body_text).expect("reference json");
-    body.dataset_id
+    body.service_id
 }
 
 pub async fn stac_search_bbox(bbox: &str) -> serde_json::Value {
@@ -131,20 +131,20 @@ pub async fn stac_search_bbox(bbox: &str) -> serde_json::Value {
     resp.json().await.expect("stac json")
 }
 
-pub async fn fetch_tile(dataset_id: Uuid, z: u32, x: u32, y: u32) -> reqwest::Response {
+pub async fn fetch_tile(service_id: Uuid, z: u32, x: u32, y: u32) -> reqwest::Response {
     let url = format!(
         "{}/ogc/tiles/WebMercatorQuad/{z}/{y}/{x}",
         env::api_base_url()
     );
     http_client()
         .get(&url)
-        .query(&[("dataset_id", dataset_id.to_string()), ("format", "webp".into())])
+        .query(&[("service_id", service_id.to_string()), ("format", "webp".into())])
         .send()
         .await
         .expect("tile request")
 }
 
-pub async fn submit_process(process_id: &str, datasets: &[Uuid]) -> ProcessExecutionResponse {
+pub async fn submit_process(process_id: &str, services: &[Uuid]) -> ProcessExecutionResponse {
     let url = format!(
         "{}/ogc/processes/{process_id}/execution",
         env::api_base_url()
@@ -154,7 +154,7 @@ pub async fn submit_process(process_id: &str, datasets: &[Uuid]) -> ProcessExecu
         .header(CONTENT_TYPE, "application/json")
         .json(&serde_json::json!({
             "inputs": {},
-            "datasets": datasets,
+            "services": services,
         }))
         .send()
         .await

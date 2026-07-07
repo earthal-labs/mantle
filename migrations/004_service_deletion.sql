@@ -1,19 +1,19 @@
--- Soft-delete + deferred hard-purge for datasets.
+-- Soft-delete + deferred hard-purge for services.
 --
 -- The append-only trigger (002_append_only_notify.sql) blocks any UPDATE/DELETE
--- on datasets/footprints unconditionally. Rather than relax that broadly, we
+-- on services/footprints unconditionally. Rather than relax that broadly, we
 -- add a separate, insert-mostly tombstone table that every read path checks,
 -- and a narrow, session-scoped bypass used only by the scheduled purge job.
 
-CREATE TABLE IF NOT EXISTS dataset_deletions (
-    dataset_id  UUID PRIMARY KEY REFERENCES datasets(id),
+CREATE TABLE IF NOT EXISTS service_deletions (
+    service_id  UUID PRIMARY KEY REFERENCES services(id),
     deleted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     reason      TEXT,
     purged_at   TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS dataset_deletions_purge_pending_idx
-    ON dataset_deletions (deleted_at)
+CREATE INDEX IF NOT EXISTS service_deletions_purge_pending_idx
+    ON service_deletions (deleted_at)
     WHERE purged_at IS NULL;
 
 -- virtual_services has no append-only trigger, so a real column + UPDATE works.
@@ -23,7 +23,7 @@ ALTER TABLE virtual_services ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 -- never set `mantle.allow_purge`, so they remain fully blocked exactly as
 -- before; only a connection that explicitly opts in via
 -- `SET LOCAL mantle.allow_purge = 'on'` (scoped to its own transaction) can
--- mutate datasets/footprints.
+-- mutate services/footprints.
 CREATE OR REPLACE FUNCTION mantle_reject_mutation() RETURNS trigger AS $$
 BEGIN
     IF current_setting('mantle.allow_purge', true) = 'on' THEN

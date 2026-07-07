@@ -22,7 +22,7 @@ class NDVI(VirtualRasterProcessingModel):
             ParameterSpec(
                 name="red_band",
                 param_type=ParamType.BAND,
-                description="Red band index (1-based) for the parent dataset",
+                description="Red band index (1-based) for the parent service",
                 required=False,
                 default=1,
                 role="red",
@@ -30,7 +30,7 @@ class NDVI(VirtualRasterProcessingModel):
             ParameterSpec(
                 name="nir_band",
                 param_type=ParamType.BAND,
-                description="NIR band index (1-based) for the parent dataset",
+                description="NIR band index (1-based) for the parent service",
                 required=False,
                 default=2,
                 role="nir",

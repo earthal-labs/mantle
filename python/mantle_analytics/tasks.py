@@ -33,25 +33,25 @@ def _legacy_result_payload(
 
 @ray.remote
 def run_ndvi(job: JobSpec, bucket: str) -> dict[str, Any]:
-    """Compute NDVI from red/NIR band values supplied in params or dataset refs."""
+    """Compute NDVI from red/NIR band values supplied in params or service refs."""
     red = job.params.get("red")
     nir = job.params.get("nir")
     if red is None:
         red = job.params.get("red_band", 0.2)
     if nir is None:
         nir = job.params.get("nir_band", 0.8)
-    if job.dataset_refs and (red is None or nir is None):
-        # Beta: pass dataset context through for future raster reads.
-        first = job.dataset_refs[0]
+    if job.service_refs and (red is None or nir is None):
+        # Beta: pass service context through for future raster reads.
+        first = job.service_refs[0]
         red = red if red is not None else 0.2
         nir = nir if nir is not None else 0.8
-        dataset_note = {
+        service_note = {
             "id": first.id,
             "name": first.name,
             "storage_uri": first.storage_uri,
         }
     else:
-        dataset_note = None
+        service_note = None
 
     red_value = float(red)
     nir_value = float(nir)
@@ -63,18 +63,18 @@ def run_ndvi(job: JobSpec, bucket: str) -> dict[str, Any]:
         "ndvi": ndvi,
         "inputs": {"red": red_value, "nir": nir_value},
     }
-    if job.dataset_refs:
-        body["dataset_refs"] = [
+    if job.service_refs:
+        body["service_refs"] = [
             {
                 "id": ref.id,
                 "name": ref.name,
                 "format": ref.format,
                 "storage_uri": ref.storage_uri,
             }
-            for ref in job.dataset_refs
+            for ref in job.service_refs
         ]
-    if dataset_note is not None:
-        body["primary_dataset"] = dataset_note
+    if service_note is not None:
+        body["primary_service"] = service_note
     return _legacy_result_payload(job, bucket, body, suffix="ndvi.json")
 
 
@@ -85,14 +85,14 @@ def run_zonal_stats(job: JobSpec, bucket: str) -> dict[str, Any]:
     plugin = get_prpm_model("zonal_stats")
     inputs = JobInputs(
         params=dict(job.params),
-        dataset_refs=[
+        service_refs=[
             {
                 "id": ref.id,
                 "name": ref.name,
                 "format": ref.format,
                 "storage_uri": ref.storage_uri,
             }
-            for ref in job.dataset_refs
+            for ref in job.service_refs
         ],
     )
     plugin.validate_inputs(inputs)
@@ -109,14 +109,14 @@ def run_plugin_job(job: JobSpec, bucket: str) -> dict[str, Any]:
     plugin = get_prpm_model(job.process_id.replace("-", "_"))
     inputs = JobInputs(
         params=dict(job.params),
-        dataset_refs=[
+        service_refs=[
             {
                 "id": ref.id,
                 "name": ref.name,
                 "format": ref.format,
                 "storage_uri": ref.storage_uri,
             }
-            for ref in job.dataset_refs
+            for ref in job.service_refs
         ],
     )
     plugin.validate_inputs(inputs)
@@ -128,16 +128,16 @@ def run_plugin_job(job: JobSpec, bucket: str) -> dict[str, Any]:
 
 @ray.remote
 def run_cube_slice(job: JobSpec, bucket: str) -> dict[str, Any]:
-    """Extract a multidimensional slice from an Icechunk dataset."""
+    """Extract a multidimensional slice from an Icechunk service."""
     variable = str(job.params.get("variable", "temperature"))
     indices = job.params.get("indices")
 
     storage_uri = job.params.get("storage_uri")
-    if not storage_uri and job.dataset_refs:
-        storage_uri = job.dataset_refs[0].storage_uri
+    if not storage_uri and job.service_refs:
+        storage_uri = job.service_refs[0].storage_uri
 
     if not storage_uri:
-        raise ValueError("cube_slice requires storage_uri or dataset_refs")
+        raise ValueError("cube_slice requires storage_uri or service_refs")
 
     slice_payload = read_cube_slice(
         str(storage_uri),
@@ -158,14 +158,14 @@ def run_process(job: JobSpec, bucket: str) -> dict[str, Any]:
     body = {
         "process_id": job.process_id,
         "params": job.params,
-        "dataset_refs": [
+        "service_refs": [
             {
                 "id": ref.id,
                 "name": ref.name,
                 "format": ref.format,
                 "storage_uri": ref.storage_uri,
             }
-            for ref in job.dataset_refs
+            for ref in job.service_refs
         ],
         "summary": json.dumps(job.params, sort_keys=True),
     }

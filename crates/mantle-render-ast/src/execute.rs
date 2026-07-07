@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
-/// Per-band tile pixel buffers keyed by `(dataset_id, band)`.
+/// Per-band tile pixel buffers keyed by `(service_id, band)`.
 #[derive(Debug, Clone, Default)]
 pub struct BandContext {
     pub pixel_len: usize,
@@ -18,11 +18,11 @@ impl BandContext {
         Self { pixel_len, bands }
     }
 
-    pub fn band(&self, dataset_id: Uuid, band: u32) -> Result<&[f32], ExecuteError> {
+    pub fn band(&self, service_id: Uuid, band: u32) -> Result<&[f32], ExecuteError> {
         self.bands
-            .get(&(dataset_id, band))
+            .get(&(service_id, band))
             .map(|v| v.as_slice())
-            .ok_or_else(|| ExecuteError::MissingBand { dataset_id, band })
+            .ok_or_else(|| ExecuteError::MissingBand { service_id, band })
     }
 }
 
@@ -30,8 +30,8 @@ impl BandContext {
 pub enum ExecuteError {
     #[error("expression requires {0:?} execution, not SimdLocal")]
     WrongTarget(ExecutionTarget),
-    #[error("missing band data for dataset {dataset_id} band {band}")]
-    MissingBand { dataset_id: Uuid, band: u32 },
+    #[error("missing band data for service {service_id} band {band}")]
+    MissingBand { service_id: Uuid, band: u32 },
     #[error("band buffer length mismatch: expected {expected}, got {got}")]
     LengthMismatch { expected: usize, got: usize },
     #[error("division by zero at pixel index {0}")]
@@ -52,8 +52,8 @@ pub fn execute_expr(expr: &Expr, ctx: &BandContext) -> Result<Vec<f32>, ExecuteE
 
 fn eval_scalar(expr: &Expr, ctx: &BandContext) -> Result<Vec<f32>, ExecuteError> {
     match expr {
-        Expr::BandRef { dataset_id, band } => {
-            let data = ctx.band(*dataset_id, *band)?;
+        Expr::BandRef { service_id, band } => {
+            let data = ctx.band(*service_id, *band)?;
             check_len(ctx.pixel_len, data.len())?;
             Ok(data.to_vec())
         }
@@ -148,7 +148,7 @@ mod tests {
     fn ndvi_expression() {
         let id = Uuid::new_v4();
         let json = format!(
-            r#"{{"type":"binary_op","op":"div","left":{{"type":"binary_op","op":"sub","left":{{"type":"band_ref","dataset_id":"{id}","band":2}},"right":{{"type":"band_ref","dataset_id":"{id}","band":1}}}},"right":{{"type":"binary_op","op":"add","left":{{"type":"band_ref","dataset_id":"{id}","band":2}},"right":{{"type":"band_ref","dataset_id":"{id}","band":1}}}}}}"#,
+            r#"{{"type":"binary_op","op":"div","left":{{"type":"binary_op","op":"sub","left":{{"type":"band_ref","service_id":"{id}","band":2}},"right":{{"type":"band_ref","service_id":"{id}","band":1}}}},"right":{{"type":"binary_op","op":"add","left":{{"type":"band_ref","service_id":"{id}","band":2}},"right":{{"type":"band_ref","service_id":"{id}","band":1}}}}}}"#,
         );
         let expr = parse_render_rule(&json).unwrap();
         let ctx = ctx_with_bands(id, 0.2, 0.6, 4);
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn rejects_mosaic_in_simd_executor() {
-        let json = r#"{"type":"mosaic","dataset_filter":{},"reducer":"mean"}"#;
+        let json = r#"{"type":"mosaic","service_filter":{},"reducer":"mean"}"#;
         let expr = parse_render_rule(json).unwrap();
         let ctx = BandContext::default();
         let err = execute_expr(&expr, &ctx).unwrap_err();

@@ -15,7 +15,7 @@ pub use plugins::{
 };
 pub use routes::{router, OgcState};
 
-use mantle_arrow::{DatasetRef, JobSpec, TileRequest};
+use mantle_arrow::{JobSpec, ServiceRef, TileRequest};
 use mantle_render_ast::{parse_render_rule, RenderExecutionPlan};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -41,10 +41,10 @@ pub struct TilesRoute {
 impl TilesRoute {
     pub const PREFIX: &'static str = "/ogc/tiles";
 
-    pub fn to_tile_request(&self, dataset_id: Uuid) -> TileRequest {
+    pub fn to_tile_request(&self, service_id: Uuid) -> TileRequest {
         let z = self.tile_matrix.parse().unwrap_or(0);
         TileRequest {
-            dataset_id,
+            service_id,
             z,
             x: self.tile_col,
             y: self.tile_row,
@@ -102,11 +102,11 @@ impl ProcessExecutionResponse {
 }
 
 /// Build a `JobSpec` for EDR point delegation to Ray.
-pub fn job_spec_from_edr(query: &EdrPointQuery, datasets: Vec<DatasetRef>) -> JobSpec {
+pub fn job_spec_from_edr(query: &EdrPointQuery, services: Vec<ServiceRef>) -> JobSpec {
     JobSpec {
         job_id: Uuid::new_v4(),
         process_id: "edr-point".into(),
-        dataset_refs: datasets,
+        service_refs: services,
         params: serde_json::json!({
             "coords": [query.coords.0, query.coords.1],
             "datetime": query.datetime,
@@ -118,11 +118,11 @@ pub fn job_spec_from_edr(query: &EdrPointQuery, datasets: Vec<DatasetRef>) -> Jo
 }
 
 /// Build a `JobSpec` for OGC Processes async execution.
-pub fn job_spec_from_process(request: &ProcessExecutionRequest, datasets: Vec<DatasetRef>) -> JobSpec {
+pub fn job_spec_from_process(request: &ProcessExecutionRequest, services: Vec<ServiceRef>) -> JobSpec {
     JobSpec {
         job_id: Uuid::new_v4(),
         process_id: request.process_id.clone(),
-        dataset_refs: datasets,
+        service_refs: services,
         params: request.inputs.clone(),
         submitted_at: chrono::Utc::now(),
     }

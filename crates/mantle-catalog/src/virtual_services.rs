@@ -1,6 +1,6 @@
 use crate::error::CatalogError;
 use crate::services::{sanitize_slug, VirtualServiceKind, VirtualServiceRecord};
-use crate::DatasetRecord;
+use crate::ServiceRecord;
 use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -20,15 +20,15 @@ where
     sqlx::query(
         r#"
         INSERT INTO virtual_services
-            (id, slug, service_kind, dataset_id, parent_dataset_id, function_id, params_defaults, created_at)
+            (id, slug, service_kind, service_id, parent_service_id, function_id, params_defaults, created_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(record.id)
     .bind(&record.slug)
     .bind(kind)
-    .bind(record.dataset_id)
-    .bind(record.parent_dataset_id)
+    .bind(record.service_id)
+    .bind(record.parent_service_id)
     .bind(&record.function_id)
     .bind(&record.params_defaults)
     .bind(record.created_at)
@@ -45,7 +45,7 @@ pub(crate) async fn fetch_virtual_service_by_slug(
     let normalized = sanitize_slug(slug);
     let row = sqlx::query_as::<_, VirtualServiceRow>(
         r#"
-        SELECT id, slug, service_kind, dataset_id, parent_dataset_id, function_id, params_defaults, created_at
+        SELECT id, slug, service_kind, service_id, parent_service_id, function_id, params_defaults, created_at
         FROM virtual_services
         WHERE slug = $1 AND deleted_at IS NULL
         "#,
@@ -58,13 +58,32 @@ pub(crate) async fn fetch_virtual_service_by_slug(
         .ok_or_else(|| CatalogError::ServiceNotFound(normalized))
 }
 
+pub(crate) async fn fetch_virtual_services(
+    pool: &PgPool,
+    service_id: Option<Uuid>,
+) -> Result<Vec<VirtualServiceRecord>, CatalogError> {
+    let rows = sqlx::query_as::<_, VirtualServiceRow>(
+        r#"
+        SELECT id, slug, service_kind, service_id, parent_service_id, function_id, params_defaults, created_at
+        FROM virtual_services
+        WHERE deleted_at IS NULL
+          AND ($1::uuid IS NULL OR service_id = $1 OR parent_service_id = $1)
+        "#,
+    )
+    .bind(service_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
 #[derive(sqlx::FromRow)]
 struct VirtualServiceRow {
     id: Uuid,
     slug: String,
     service_kind: String,
-    dataset_id: Uuid,
-    parent_dataset_id: Option<Uuid>,
+    service_id: Uuid,
+    parent_service_id: Option<Uuid>,
     function_id: String,
     params_defaults: serde_json::Value,
     created_at: chrono::DateTime<Utc>,
@@ -80,8 +99,8 @@ impl From<VirtualServiceRow> for VirtualServiceRecord {
             id: row.id,
             slug: row.slug,
             service_kind,
-            dataset_id: row.dataset_id,
-            parent_dataset_id: row.parent_dataset_id,
+            service_id: row.service_id,
+            parent_service_id: row.parent_service_id,
             function_id: row.function_id,
             params_defaults: row.params_defaults,
             created_at: row.created_at,
@@ -101,15 +120,15 @@ pub(crate) async fn slug_exists(pool: &PgPool, slug: &str) -> Result<bool, Catal
     Ok(row.0)
 }
 
-pub(crate) async fn attach_function_to_dataset(
+pub(crate) async fn attach_function_to_service(
     pool: &PgPool,
-    parent_dataset: &DatasetRecord,
+    parent_service: &ServiceRecord,
     function_id: String,
     params_defaults: serde_json::Value,
     endpoint_slug: Option<String>,
 ) -> Result<VirtualServiceRecord, CatalogError> {
     let slug = crate::services::generate_service_slug(
-        parent_dataset.id,
+        parent_service.id,
         &function_id,
         endpoint_slug.as_deref(),
     );
@@ -122,8 +141,8 @@ pub(crate) async fn attach_function_to_dataset(
         id: Uuid::new_v4(),
         slug,
         service_kind: VirtualServiceKind::Attached,
-        dataset_id: parent_dataset.id,
-        parent_dataset_id: Some(parent_dataset.id),
+        service_id: parent_service.id,
+        parent_service_id: Some(parent_service.id),
         function_id,
         params_defaults,
         created_at: Utc::now(),

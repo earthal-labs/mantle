@@ -69,7 +69,7 @@ pub trait CacheClient: Send + Sync {
         data: &[u8],
         ttl_seconds: u64,
     ) -> Result<(), CacheError>;
-    /// Encoded output tile bytes, keyed by dataset(s)/z/x/y/band/render_rule/format.
+    /// Encoded output tile bytes, keyed by service(s)/z/x/y/band/render_rule/format.
     async fn get_tile(&self, key: &str) -> Result<Option<Vec<u8>>, CacheError>;
     async fn set_tile(&self, key: &str, data: &[u8], ttl_seconds: u64) -> Result<(), CacheError>;
 }
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn ifd_key_uses_agents_md_prefix() {
-        assert_eq!(ifd_key("datasets/foo.tif"), "mantle:ifd:datasets/foo.tif");
+        assert_eq!(ifd_key("services/foo.tif"), "mantle:ifd:services/foo.tif");
         assert!(ifd_key("x").starts_with(IFD_KEY_PREFIX));
     }
 

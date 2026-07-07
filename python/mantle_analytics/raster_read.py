@@ -10,19 +10,19 @@ _DEFAULT_MAX_SAMPLES = 4096
 
 
 def read_band_samples(
-    dataset_ref: dict[str, Any],
+    service_ref: dict[str, Any],
     band: int,
     *,
     max_samples: int = _DEFAULT_MAX_SAMPLES,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    """Read numeric samples from one band of a catalog dataset ref.
+    """Read numeric samples from one band of a catalog service ref.
 
   Returns ``(samples, meta)``. Uses ``rasterio`` when installed; otherwise
-  returns a deterministic stub so beta jobs can exercise the ``dataset_refs``
+  returns a deterministic stub so beta jobs can exercise the ``service_refs``
   path without GDAL in the worker image.
     """
-    storage_uri = str(dataset_ref.get("storage_uri", ""))
-    fmt = str(dataset_ref.get("format", "cog")).lower()
+    storage_uri = str(service_ref.get("storage_uri", ""))
+    fmt = str(service_ref.get("format", "cog")).lower()
     meta: dict[str, Any] = {
         "storage_uri": storage_uri,
         "format": fmt,
@@ -31,7 +31,7 @@ def read_band_samples(
     }
 
     if not storage_uri:
-        raise ValueError("dataset_ref missing storage_uri")
+        raise ValueError("service_ref missing storage_uri")
 
     try:
         import rasterio  # type: ignore[import-untyped]

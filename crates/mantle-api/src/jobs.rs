@@ -164,7 +164,7 @@ mod tests {
         let job = JobSpec {
             job_id,
             process_id: "ndvi".into(),
-            dataset_refs: vec![],
+            service_refs: vec![],
             params: serde_json::json!({}),
             submitted_at: Utc::now(),
         };

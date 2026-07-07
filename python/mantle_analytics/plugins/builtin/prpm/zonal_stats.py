@@ -34,7 +34,7 @@ class ZonalStatsJob(PersistentRasterProcessingModel):
             ParameterSpec(
                 name="band",
                 param_type=ParamType.BAND,
-                description="Band index when raster zonal stats are computed from dataset_refs",
+                description="Band index when raster zonal stats are computed from service_refs",
                 direction=ParamDirection.INPUT,
                 required=False,
                 default=1,
@@ -61,24 +61,24 @@ class ZonalStatsJob(PersistentRasterProcessingModel):
         super().validate_inputs(inputs)
         values = inputs.params.get("values")
         has_values = isinstance(values, list) and bool(values)
-        has_datasets = bool(inputs.dataset_refs)
-        if not has_values and not has_datasets:
+        has_services = bool(inputs.service_refs)
+        if not has_values and not has_services:
             raise ValueError(
-                "zonal_stats requires params.values or dataset_refs with band"
+                "zonal_stats requires params.values or service_refs with band"
             )
-        if has_datasets and not has_values:
+        if has_services and not has_values:
             band = inputs.params.get("band", 1)
             if not isinstance(band, int) or band < 1:
                 raise ValueError(
-                    "band must be a positive integer when using dataset_refs"
+                    "band must be a positive integer when using service_refs"
                 )
 
     def run(self, inputs: JobInputs, ctx: AnalyticsContext) -> JobResult:
         values = inputs.params.get("values")
         read_meta: dict[str, Any] | None = None
-        if values is None and inputs.dataset_refs:
+        if values is None and inputs.service_refs:
             band = int(inputs.params.get("band", 1))
-            numeric, read_meta = read_band_samples(inputs.dataset_refs[0], band)
+            numeric, read_meta = read_band_samples(inputs.service_refs[0], band)
         else:
             numeric = np.asarray(values, dtype=np.float64)
         count = int(numeric.size)
@@ -91,9 +91,9 @@ class ZonalStatsJob(PersistentRasterProcessingModel):
             "min": float(numeric.min()) if count else None,
             "max": float(numeric.max()) if count else None,
             "geometry": inputs.params.get("geometry"),
-            "dataset_refs": [
+            "service_refs": [
                 ref.get("id")
-                for ref in inputs.dataset_refs
+                for ref in inputs.service_refs
                 if ref.get("id") is not None
             ],
         }

@@ -17,13 +17,13 @@ pub use engine::{OxigdalRasterEngine, StubRasterEngine};
 pub use tile_math::{tile_bounds_web_mercator, TileBounds, TILE_SIZE};
 
 use async_trait::async_trait;
-use mantle_arrow::{DatasetRef, TileRequest};
+use mantle_arrow::{ServiceRef, TileRequest};
 use oxigdal::core_types::types::GeoTransform;
 use serde::Serialize;
 use thiserror::Error;
 
-/// What oxigdal actually detected for a dataset — surfaced directly via
-/// `GET /admin/datasets/{id}/debug` so a CRS/geotransform mismatch can be
+/// What oxigdal actually detected for a service — surfaced directly via
+/// `GET /admin/services/{id}/debug` so a CRS/geotransform mismatch can be
 /// diagnosed from one curl instead of log-grepping or guessing tile
 /// coordinates.
 #[derive(Debug, Clone, Serialize)]
@@ -35,7 +35,7 @@ pub struct CogDebugInfo {
     pub tile_size: Option<(u32, u32)>,
     pub epsg_code: Option<u32>,
     pub geo_transform: Option<GeoTransform>,
-    /// The dataset's pixel extent reprojected to EPSG:4326, as a closed
+    /// The service's pixel extent reprojected to EPSG:4326, as a closed
     /// ring of `[lon, lat]` corners (NW, NE, SE, SW, NW) — lets clients
     /// draw the real footprint / zoom to it without doing CRS math
     /// themselves. `None` if CRS/geotransform detection failed.
@@ -84,22 +84,22 @@ pub enum RasterError {
 pub trait RasterEngine: Send + Sync {
     async fn render_tile(
         &self,
-        datasets: &[DatasetRef],
+        services: &[ServiceRef],
         request: &TileRequest,
         format: TileFormat,
     ) -> Result<Vec<u8>, RasterError>;
 
-    /// Read per-band float32 tile layers from a dataset (for on-the-fly plugins).
+    /// Read per-band float32 tile layers from a service (for on-the-fly plugins).
     async fn read_tile_bands(
         &self,
-        dataset: &DatasetRef,
+        service: &ServiceRef,
         request: &TileRequest,
         band_indices: &[u32],
     ) -> Result<Vec<TileLayer>, RasterError>;
 
-    /// Report what the raster engine actually detects for a dataset
+    /// Report what the raster engine actually detects for a service
     /// (CRS, geotransform, dimensions, tiling) without rendering a tile.
-    async fn debug_metadata(&self, dataset: &DatasetRef) -> Result<CogDebugInfo, RasterError>;
+    async fn debug_metadata(&self, service: &ServiceRef) -> Result<CogDebugInfo, RasterError>;
 }
 
 #[cfg(test)]

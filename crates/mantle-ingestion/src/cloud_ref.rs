@@ -5,7 +5,7 @@ use crate::storage::icechunk_repo_uri;
 use crate::uri::{ReferenceFormat, ValidatedUri};
 use crate::virtualize::{virtualize_to_icechunk, VirtualizeRequest};
 use crate::{validate_storage_uri, CloudReferenceRequest, IngestionError};
-use mantle_arrow::DatasetFormat;
+use mantle_arrow::ServiceFormat;
 use tracing::info;
 use uuid::Uuid;
 
@@ -95,9 +95,9 @@ pub(crate) async fn register_cloud_reference(
             })
             .await?;
             let format = if response.format == "cog" {
-                DatasetFormat::Cog
+                ServiceFormat::Cog
             } else {
-                DatasetFormat::Icechunk
+                ServiceFormat::Icechunk
             };
             (
                 format,
@@ -108,11 +108,11 @@ pub(crate) async fn register_cloud_reference(
         _ => {
             let header = service.fetch_header_sample(&validated).await.unwrap_or_default();
             let spatial = harvest_from_header_sample(&header, validated.format);
-            (DatasetFormat::Cog, validated.raw.clone(), spatial)
+            (ServiceFormat::Cog, validated.raw.clone(), spatial)
         }
     };
 
-    let dataset = mantle_catalog::DatasetRecord {
+    let record = mantle_catalog::ServiceRecord {
         id,
         name: request.name,
         description: request.description,
@@ -124,7 +124,7 @@ pub(crate) async fn register_cloud_reference(
         created_at: now,
     };
     let footprint = mantle_catalog::FootprintRecord {
-        dataset_id: id,
+        service_id: id,
         geometry_wkt: spatial.geometry_wkt,
         cloud_cover: None,
         partition_key: String::new(),
@@ -132,10 +132,10 @@ pub(crate) async fn register_cloud_reference(
 
     service
         .catalog
-        .insert_footprint(dataset, footprint)
+        .insert_footprint(record, footprint)
         .await
         .map_err(IngestionError::from)?;
 
-    info!(dataset_id = %id, format = ?format, "registered cloud reference");
+    info!(service_id = %id, format = ?format, "registered cloud reference");
     Ok(id)
 }

@@ -1,4 +1,6 @@
-//! Virtual service routes — vRPM attached models and output datasets.
+//! Service routes — unified `GET /services/{id}` resource (base services by
+//! UUID, attached/output virtual services by slug), plus virtual-service
+//! tile/OGC-tile/STAC routes.
 
 use crate::error::ApiError;
 use crate::vrpm_client::VrpmSidecarClient;
@@ -35,7 +37,7 @@ pub struct AttachFunctionResponse {
     pub service_id: Uuid,
     pub slug: String,
     pub function_id: String,
-    pub dataset_id: Uuid,
+    pub parent_service_id: Uuid,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,7 +50,7 @@ pub struct ServiceTileQuery {
 
 pub fn services_router() -> Router<AppState> {
     Router::new()
-        .route("/{slug}", get(get_service_metadata))
+        .route("/{id}", get(get_service_resource))
         .route("/{slug}/tiles/{z}/{x}/{y}", get(get_service_tile))
         .route(
             "/{slug}/ogc/tiles/{tile_matrix_set}/{tile_matrix}/{tile_row}/{tile_col}",
@@ -60,10 +62,10 @@ pub fn services_router() -> Router<AppState> {
         )
 }
 
-/// `POST /admin/services/{dataset_id}/attach` — attach a vRPM to a dataset.
+/// `POST /admin/services/{service_id}/attach` — attach a vRPM to a service.
 pub async fn attach_function(
     State(state): State<AppState>,
-    Path(dataset_id): Path<Uuid>,
+    Path(service_id): Path<Uuid>,
     Json(body): Json<AttachFunctionRequest>,
 ) -> Result<Json<AttachFunctionResponse>, ApiError> {
     if body.function_id.trim().is_empty() {
@@ -88,7 +90,7 @@ pub async fn attach_function(
     let record = state
         .catalog
         .attach_function(
-            dataset_id,
+            service_id,
             body.function_id.clone(),
             body.params_defaults,
             body.endpoint_slug,
@@ -100,24 +102,86 @@ pub async fn attach_function(
         service_id: record.id,
         slug: record.slug,
         function_id: record.function_id,
-        dataset_id: record.dataset_id,
+        parent_service_id: record.service_id,
     }))
 }
 
-async fn get_service_metadata(
+/// `GET /services/{id}` — unified item lookup. Tries `id` as a base service
+/// UUID first; if that fails to parse, falls back to an attached/output
+/// virtual service slug. One flat namespace, matching ArcGIS's own REST
+/// directory convention.
+async fn get_service_resource(
     State(state): State<AppState>,
-    Path(slug): Path<String>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    match Uuid::parse_str(&id) {
+        Ok(service_id) => get_base_service_resource(state, service_id).await,
+        Err(_) => get_virtual_service_resource(state, &id).await,
+    }
+}
+
+/// Base service (formerly "dataset") resource — name, description, extent,
+/// available operations, and any virtual services attached to it.
+async fn get_base_service_resource(
+    state: AppState,
+    service_id: Uuid,
 ) -> Result<Json<Value>, ApiError> {
     let service = state
         .catalog
-        .get_virtual_service_by_slug(&slug)
+        .get_service(service_id)
         .await
         .map_err(catalog_err)?;
 
-    let parent_id = service.parent_dataset_id.unwrap_or(service.dataset_id);
+    // Best-effort: a service can exist in the catalog with an unreadable or
+    // not-yet-georeferenced source file. Extent is a bonus, not a
+    // requirement, for this resource to be useful.
+    let extent = state
+        .raster
+        .debug_metadata(&service.to_service_ref())
+        .await
+        .ok();
+
+    let attached_services = state
+        .catalog
+        .list_virtual_services(Some(service.id))
+        .await
+        .unwrap_or_default();
+
+    Ok(Json(json!({
+        "type": "Service",
+        "id": service.id,
+        "name": service.name,
+        "description": service.description,
+        "format": service.format,
+        "storage_uri": service.storage_uri,
+        "crs": service.crs,
+        "created_at": service.created_at,
+        "extent": extent,
+        "attached_services": attached_services,
+        "links": [
+            {"rel": "self", "href": format!("/services/{}", service.id), "method": "GET"},
+            {"rel": "tiles", "href": format!("/tiles/{{z}}/{{x}}/{{y}}?service_id={}", service.id), "method": "GET"},
+            {"rel": "stac-items", "href": "/stac/collections/mantle/items", "method": "GET"},
+            {"rel": "debug", "href": format!("/admin/services/{}/debug", service.id), "method": "GET", "auth": "admin"},
+            {"rel": "delete", "href": format!("/admin/services/{}/delete", service.id), "method": "POST", "auth": "admin"},
+            {"rel": "purge", "href": format!("/admin/services/{}/purge", service.id), "method": "POST", "auth": "admin"},
+            {"rel": "attach-service", "href": format!("/admin/services/{}/attach", service.id), "method": "POST", "auth": "admin"},
+        ],
+    })))
+}
+
+/// Attached/output virtual service resource, resolved by public URL slug.
+async fn get_virtual_service_resource(state: AppState, slug: &str) -> Result<Json<Value>, ApiError> {
+    let service = state
+        .catalog
+        .get_virtual_service_by_slug(slug)
+        .await
+        .map_err(catalog_err)?;
+
+    let parent_id = service.parent_service_id.unwrap_or(service.service_id);
     let parent = state
         .catalog
-        .get_dataset(parent_id)
+        .get_service(parent_id)
         .await
         .map_err(catalog_err)?;
 
@@ -146,14 +210,14 @@ async fn get_service_metadata(
         "params_defaults": service.params_defaults,
         "parameters": parameters,
         "plugin": plugin,
-        "parent_dataset": {
+        "parent_service": {
             "id": parent.id,
             "name": parent.name,
             "storage_uri": parent.storage_uri,
             "format": parent.format,
         },
         "links": [
-            {"rel": "self", "href": format!("/services/{}/", service.slug)},
+            {"rel": "self", "href": format!("/services/{}", service.slug)},
             {"rel": "tiles", "href": format!("/services/{}/tiles/{{z}}/{{x}}/{{y}}", service.slug)},
             {"rel": "ogc-tiles", "href": format!("/services/{}/ogc/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}", service.slug)},
         ]
@@ -193,10 +257,10 @@ async fn get_service_stac_items(
         .await
         .map_err(catalog_err)?;
 
-    let parent_id = service.parent_dataset_id.unwrap_or(service.dataset_id);
+    let parent_id = service.parent_service_id.unwrap_or(service.service_id);
     let parent = state
         .catalog
-        .get_dataset(parent_id)
+        .get_service(parent_id)
         .await
         .map_err(catalog_err)?;
 
@@ -249,13 +313,13 @@ async fn render_virtual_tile(
 
     match service.service_kind {
         VirtualServiceKind::Output => {
-            let dataset = state
+            let output = state
                 .catalog
-                .get_dataset(service.dataset_id)
+                .get_service(service.service_id)
                 .await
                 .map_err(catalog_err)?;
             let request = mantle_arrow::TileRequest {
-                dataset_id: dataset.id,
+                service_id: output.id,
                 z,
                 x,
                 y,
@@ -264,7 +328,7 @@ async fn render_virtual_tile(
             };
             let bytes = state
                 .raster
-                .render_tile(&[dataset.to_dataset_ref()], &request, format)
+                .render_tile(&[output.to_service_ref()], &request, format)
                 .await
                 .map_err(|e| {
                     warn!(error = %e, z, x, y, "tile render failed");
@@ -275,10 +339,10 @@ async fn render_virtual_tile(
         VirtualServiceKind::Attached => {}
     }
 
-    let parent_id = service.parent_dataset_id.unwrap_or(service.dataset_id);
+    let parent_id = service.parent_service_id.unwrap_or(service.service_id);
     let parent = state
         .catalog
-        .get_dataset(parent_id)
+        .get_service(parent_id)
         .await
         .map_err(catalog_err)?;
 
@@ -307,7 +371,7 @@ async fn render_virtual_tile(
     let band_map = band_indices_for_function(&service.function_id, &effective_params);
     let indices: Vec<u32> = band_map.values().copied().collect();
     let request = mantle_arrow::TileRequest {
-        dataset_id: parent.id,
+        service_id: parent.id,
         z,
         x,
         y,
@@ -317,7 +381,7 @@ async fn render_virtual_tile(
 
     let layers = state
         .raster
-        .read_tile_bands(&parent.to_dataset_ref(), &request, &indices)
+        .read_tile_bands(&parent.to_service_ref(), &request, &indices)
         .await
         .map_err(|e| {
             warn!(error = %e, z, x, y, "band read failed");

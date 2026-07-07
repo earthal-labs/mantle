@@ -40,7 +40,7 @@ pub enum ParseError {
 
 pub struct ValidateContext {
 
-    pub max_band_by_dataset: HashMap<Uuid, u32>,
+    pub max_band_by_service: HashMap<Uuid, u32>,
 
 }
 
@@ -60,7 +60,7 @@ pub fn parse_render_rule(json: &str) -> Result<Expr, ParseError> {
 
 
 
-/// Parse and validate with optional per-dataset band upper bounds.
+/// Parse and validate with optional per-service band upper bounds.
 
 pub fn parse_render_rule_with_context(
 
@@ -96,7 +96,7 @@ fn validate_expr(expr: &Expr, ctx: &ValidateContext, depth: usize) -> Result<(),
 
     match expr {
 
-        Expr::BandRef { dataset_id, band } => {
+        Expr::BandRef { service_id, band } => {
 
             if *band == 0 {
 
@@ -108,13 +108,13 @@ fn validate_expr(expr: &Expr, ctx: &ValidateContext, depth: usize) -> Result<(),
 
             }
 
-            if let Some(max) = ctx.max_band_by_dataset.get(dataset_id) {
+            if let Some(max) = ctx.max_band_by_service.get(service_id) {
 
                 if *band > *max {
 
                     return Err(ParseError::Validation(format!(
 
-                        "band {band} exceeds dataset {dataset_id} maximum of {max}"
+                        "band {band} exceeds service {service_id} maximum of {max}"
 
                     )));
 
@@ -166,17 +166,17 @@ fn validate_expr(expr: &Expr, ctx: &ValidateContext, depth: usize) -> Result<(),
 
         Expr::Mosaic {
 
-            dataset_filter,
+            service_filter,
 
             reducer: _,
 
         } => {
 
-            if dataset_filter.is_null() {
+            if service_filter.is_null() {
 
                 return Err(ParseError::Validation(
 
-                    "mosaic dataset_filter must be a JSON object".into(),
+                    "mosaic service_filter must be a JSON object".into(),
 
                 ));
 
@@ -242,13 +242,13 @@ fn walk_band_refs(
 
     match expr {
 
-        Expr::BandRef { dataset_id, band } => {
+        Expr::BandRef { service_id, band } => {
 
-            if seen.insert((*dataset_id, *band)) {
+            if seen.insert((*service_id, *band)) {
 
                 out.push(crate::ast::BandRefKey {
 
-                    dataset_id: *dataset_id,
+                    service_id: *service_id,
 
                     band: *band,
 
@@ -376,7 +376,7 @@ mod tests {
 
         let json = format!(
 
-            r#"{{"type":"band_ref","dataset_id":"{id}","band":0}}"#,
+            r#"{{"type":"band_ref","service_id":"{id}","band":0}}"#,
 
         );
 
@@ -410,13 +410,13 @@ mod tests {
 
         let json = format!(
 
-            r#"{{"type":"band_ref","dataset_id":"{id}","band":5}}"#,
+            r#"{{"type":"band_ref","service_id":"{id}","band":5}}"#,
 
         );
 
         let ctx = ValidateContext {
 
-            max_band_by_dataset: HashMap::from([(id, 4)]),
+            max_band_by_service: HashMap::from([(id, 4)]),
 
         };
 
@@ -436,7 +436,7 @@ mod tests {
 
         let json = format!(
 
-            r#"{{"type":"binary_op","op":"add","left":{{"type":"band_ref","dataset_id":"{id}","band":1}},"right":{{"type":"band_ref","dataset_id":"{id}","band":1}}}}"#,
+            r#"{{"type":"binary_op","op":"add","left":{{"type":"band_ref","service_id":"{id}","band":1}},"right":{{"type":"band_ref","service_id":"{id}","band":1}}}}"#,
 
         );
 

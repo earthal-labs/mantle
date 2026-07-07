@@ -1,6 +1,6 @@
 use crate::error::CatalogError;
 use crate::partition;
-use crate::{DatasetRecord, FootprintRecord};
+use crate::{FootprintRecord, ServiceRecord};
 use duckdb::Connection;
 use mantle_config::CatalogConfig;
 use std::path::Path;
@@ -12,7 +12,7 @@ pub(crate) const CATALOG_ALIAS: &str = "mantle_catalog";
 pub(crate) const FOOTPRINTS_TABLE: &str = "footprints";
 pub(crate) const GEOPARQUET_VERSION: &str = "V2";
 /// Plain (non-DuckLake) read-only attach to the same Postgres database, used
-/// only to check `dataset_deletions` from within DuckDB queries — Postgres is
+/// only to check `service_deletions` from within DuckDB queries — Postgres is
 /// the single source of truth for the soft-delete tombstone, not DuckLake.
 pub(crate) const APP_POSTGRES_ALIAS: &str = "app_postgres";
 
@@ -87,7 +87,7 @@ impl DuckLakeSession {
         let ddl = format!(
             r#"
             CREATE TABLE IF NOT EXISTS {CATALOG_ALIAS}.{FOOTPRINTS_TABLE} (
-                dataset_id UUID,
+                service_id UUID,
                 name VARCHAR,
                 format VARCHAR,
                 storage_uri VARCHAR,
@@ -107,7 +107,7 @@ impl DuckLakeSession {
 
     pub fn append_footprint_parquet(
         &self,
-        dataset: &DatasetRecord,
+        service: &ServiceRecord,
         footprint: &FootprintRecord,
         partition_key: &str,
     ) -> Result<String, CatalogError> {
@@ -120,11 +120,11 @@ impl DuckLakeSession {
         self.with_conn(|conn| {
             conn.execute_batch("BEGIN TRANSACTION;")?;
 
-            let temporal_start = dataset
+            let temporal_start = service
                 .temporal_start
                 .map(|t| t.to_rfc3339())
                 .unwrap_or_default();
-            let temporal_end = dataset
+            let temporal_end = service
                 .temporal_end
                 .map(|t| t.to_rfc3339())
                 .unwrap_or_default();
@@ -133,7 +133,7 @@ impl DuckLakeSession {
                 r#"
                 CREATE OR REPLACE TEMP TABLE mantle_footprint_stage AS
                 SELECT
-                    ?::UUID AS dataset_id,
+                    ?::UUID AS service_id,
                     ? AS name,
                     ? AS format,
                     ? AS storage_uri,
@@ -150,11 +150,11 @@ impl DuckLakeSession {
             conn.execute(
                 &staging,
                 duckdb::params![
-                    dataset.id.to_string(),
-                    dataset.name.as_str(),
-                    crate::postgres::format_to_db(dataset.format),
-                    dataset.storage_uri.as_str(),
-                    dataset.crs.as_deref(),
+                    service.id.to_string(),
+                    service.name.as_str(),
+                    crate::postgres::format_to_db(service.format),
+                    service.storage_uri.as_str(),
+                    service.crs.as_deref(),
                     footprint.geometry_wkt.as_str(),
                     footprint.cloud_cover,
                     partition_key,
@@ -196,12 +196,12 @@ impl DuckLakeSession {
     pub fn spatial_query(
         &self,
         query: &crate::SpatialQuery,
-    ) -> Result<Vec<mantle_arrow::DatasetRef>, CatalogError> {
+    ) -> Result<Vec<mantle_arrow::ServiceRef>, CatalogError> {
         let geom_col = &self.config.geometry_column;
         let mut sql = format!(
             r#"
             SELECT DISTINCT
-                dataset_id::VARCHAR AS id,
+                service_id::VARCHAR AS id,
                 name,
                 format,
                 storage_uri,
@@ -210,8 +210,8 @@ impl DuckLakeSession {
             FROM {CATALOG_ALIAS}.{FOOTPRINTS_TABLE} f
             WHERE 1=1
               AND NOT EXISTS (
-                  SELECT 1 FROM {APP_POSTGRES_ALIAS}.dataset_deletions d
-                  WHERE d.dataset_id = f.dataset_id
+                  SELECT 1 FROM {APP_POSTGRES_ALIAS}.service_deletions d
+                  WHERE d.service_id = f.service_id
               )
             "#
         );
@@ -239,7 +239,7 @@ impl DuckLakeSession {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([], |row| {
-                Ok(mantle_arrow::DatasetRef {
+                Ok(mantle_arrow::ServiceRef {
                     id: Uuid::parse_str(row.get::<_, String>(0)?.as_str())
                         .unwrap_or_default(),
                     name: row.get(1)?,
@@ -255,12 +255,12 @@ impl DuckLakeSession {
         })
     }
 
-    /// Physically remove a dataset's footprint row from the DuckLake-backed
+    /// Physically remove a service's footprint row from the DuckLake-backed
     /// table and reclaim its Parquet file. A real `DELETE` here supersedes the
     /// row's current snapshot; expiring snapshots + cleaning up old files then
     /// makes the now-orphaned file eligible for physical removal. This is
     /// native DuckLake DML — not subject to the Postgres append-only trigger,
-    /// which only covers the plain `datasets`/`footprints` tables.
+    /// which only covers the plain `services`/`footprints` tables.
     ///
     /// Note: `ducklake_cleanup_old_files` is known to no-op against an
     /// external Postgres catalog on some DuckLake builds
@@ -268,11 +268,11 @@ impl DuckLakeSession {
     /// silently fail to reclaim storage even though it reports success. The
     /// delete from the logical table (and hence from search/read results)
     /// still takes effect regardless.
-    pub fn purge_dataset(&self, dataset_id: Uuid) -> Result<(), CatalogError> {
+    pub fn purge_service(&self, service_id: Uuid) -> Result<(), CatalogError> {
         self.with_conn(|conn| {
             conn.execute(
-                &format!("DELETE FROM {CATALOG_ALIAS}.{FOOTPRINTS_TABLE} WHERE dataset_id = ?;"),
-                duckdb::params![dataset_id.to_string()],
+                &format!("DELETE FROM {CATALOG_ALIAS}.{FOOTPRINTS_TABLE} WHERE service_id = ?;"),
+                duckdb::params![service_id.to_string()],
             )?;
             conn.execute_batch(&format!(
                 "CALL ducklake_expire_snapshots('{CATALOG_ALIAS}', older_than => now());"
@@ -280,7 +280,7 @@ impl DuckLakeSession {
             if let Err(err) = conn.execute_batch(&format!(
                 "CALL ducklake_cleanup_old_files('{CATALOG_ALIAS}', cleanup_all => true);"
             )) {
-                warn!("ducklake_cleanup_old_files failed for dataset {dataset_id}: {err}");
+                warn!("ducklake_cleanup_old_files failed for service {service_id}: {err}");
             }
             Ok(())
         })
@@ -393,9 +393,9 @@ fn normalize_data_path(path: &str) -> String {
 
 pub(crate) fn resolve_partition_key(
     footprint: &FootprintRecord,
-    dataset: &DatasetRecord,
+    service: &ServiceRecord,
 ) -> String {
-    partition::resolve_partition_key(&footprint.partition_key, dataset.temporal_start)
+    partition::resolve_partition_key(&footprint.partition_key, service.temporal_start)
 }
 
 #[cfg(test)]

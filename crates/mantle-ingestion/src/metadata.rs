@@ -18,7 +18,7 @@ impl Default for SpatialMetadata {
             // genuinely don't know the CRS — claiming EPSG:4326 here was
             // actively wrong for projected (e.g. UTM) sources and overrode
             // the raster engine's own, correctly-detected CRS at render time
-            // (see OxigdalRasterEngine::read_dataset_layer's fallback).
+            // (see OxigdalRasterEngine::read_service_layer's fallback).
             crs: None,
             geometry_wkt: "POLYGON((-180 -90, -180 90, 180 90, 180 -90, -180 -90))".into(),
             band_count: 1,

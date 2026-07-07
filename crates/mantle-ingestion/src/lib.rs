@@ -1,4 +1,4 @@
-//! Dataset ingestion pathways: Pathway A (multipart upload → COG on S3) and
+//! Service ingestion pathways: Pathway A (multipart upload → COG on S3) and
 //! Pathway B (cloud reference + VirtualiZarr→Icechunk virtual refs).
 
 mod cloud_ref;
@@ -10,7 +10,7 @@ mod virtualize;
 
 pub use service::MantleIngestionService;
 pub use storage::{
-    build_object_store, dataset_object_key, delete_by_storage_uri, storage_uri,
+    build_object_store, delete_by_storage_uri, service_object_key, storage_uri,
     upload_stream_with_header_peek,
 };
 pub use uri::{validate_storage_uri, ReferenceFormat, ReferenceScheme, ValidatedUri};
@@ -41,7 +41,7 @@ pub struct CloudReferenceRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestionResponse {
-    pub dataset_id: Uuid,
+    pub service_id: Uuid,
 }
 
 #[derive(Debug, Error)]
@@ -60,11 +60,11 @@ pub enum IngestionError {
 
 #[async_trait]
 pub trait IngestionService: Send + Sync {
-    /// Pathway A — register dataset after bytes are stored (admin handler streams to S3).
-    async fn register_uploaded_dataset(
+    /// Pathway A — register service after bytes are stored (admin handler streams to S3).
+    async fn register_uploaded_service(
         &self,
         request: UploadRequest,
-        dataset_id: Uuid,
+        service_id: Uuid,
         storage_uri: String,
         header_peek: Vec<u8>,
     ) -> Result<Uuid, IngestionError>;
@@ -89,20 +89,20 @@ impl StubIngestionService {
 
 #[async_trait]
 impl IngestionService for StubIngestionService {
-    async fn register_uploaded_dataset(
+    async fn register_uploaded_service(
         &self,
         request: UploadRequest,
-        dataset_id: Uuid,
+        service_id: Uuid,
         storage_uri: String,
         _header_peek: Vec<u8>,
     ) -> Result<Uuid, IngestionError> {
-        let id = dataset_id;
+        let id = service_id;
         let now = chrono::Utc::now();
-        let dataset = mantle_catalog::DatasetRecord {
+        let service = mantle_catalog::ServiceRecord {
             id,
             name: request.name,
             description: request.description,
-            format: mantle_arrow::DatasetFormat::Cog,
+            format: mantle_arrow::ServiceFormat::Cog,
             storage_uri,
             crs: Some("EPSG:4326".into()),
             temporal_start: None,
@@ -110,12 +110,12 @@ impl IngestionService for StubIngestionService {
             created_at: now,
         };
         let footprint = mantle_catalog::FootprintRecord {
-            dataset_id: id,
+            service_id: id,
             geometry_wkt: "POLYGON((-1 -1, -1 1, 1 1, 1 -1, -1 -1))".into(),
             cloud_cover: None,
             partition_key: "stub".into(),
         };
-        self.catalog.insert_footprint(dataset, footprint).await?;
+        self.catalog.insert_footprint(service, footprint).await?;
         Ok(id)
     }
 
@@ -127,10 +127,10 @@ impl IngestionService for StubIngestionService {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
         let format = match validate_storage_uri(&request.storage_uri)?.format {
-            ReferenceFormat::NetCdf | ReferenceFormat::Hdf5 => mantle_arrow::DatasetFormat::Icechunk,
-            _ => mantle_arrow::DatasetFormat::Cog,
+            ReferenceFormat::NetCdf | ReferenceFormat::Hdf5 => mantle_arrow::ServiceFormat::Icechunk,
+            _ => mantle_arrow::ServiceFormat::Cog,
         };
-        let dataset = mantle_catalog::DatasetRecord {
+        let service = mantle_catalog::ServiceRecord {
             id,
             name: request.name,
             description: request.description,
@@ -142,12 +142,12 @@ impl IngestionService for StubIngestionService {
             created_at: now,
         };
         let footprint = mantle_catalog::FootprintRecord {
-            dataset_id: id,
+            service_id: id,
             geometry_wkt: "POLYGON((-1 -1, -1 1, 1 1, 1 -1, -1 -1))".into(),
             cloud_cover: None,
             partition_key: "stub".into(),
         };
-        self.catalog.insert_footprint(dataset, footprint).await?;
+        self.catalog.insert_footprint(service, footprint).await?;
         Ok(id)
     }
 }

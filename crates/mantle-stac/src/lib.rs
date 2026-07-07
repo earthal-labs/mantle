@@ -6,7 +6,7 @@ mod models;
 mod routes;
 
 pub use filter::StacSearchRequest;
-pub use items::{build_item_collection, dataset_to_stac_item, datasets_to_stac_items};
+pub use items::{build_item_collection, service_to_stac_item, services_to_stac_items};
 pub use models::{
     collection_list, default_collection, landing_catalog, StacCatalog, StacCollection,
     StacCollectionList, StacItem, StacItemCollection, StacLink, DEFAULT_COLLECTION_ID,

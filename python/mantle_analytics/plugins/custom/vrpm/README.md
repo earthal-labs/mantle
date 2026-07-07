@@ -1,6 +1,6 @@
 # Custom vRPM plugins
 
-Add Virtual Raster Processing Models here for tile-time pixel math on existing catalog datasets.
+Add Virtual Raster Processing Models here for tile-time pixel math on existing catalog services.
 
 **Do not edit `plugins/builtin/`** — those modules are read-only and ship with Mantle. Copy [`minimal_vrpm.py`](minimal_vrpm.py) as a starting point.
 

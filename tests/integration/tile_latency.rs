@@ -1,6 +1,6 @@
 //! Tile latency benchmark (p99 under 10ms warm cache). Set MANTLE_LOAD_TEST=1; see docs/operations.md.
 
-use mantle_arrow::{DatasetFormat, DatasetRef, TileRequest};
+use mantle_arrow::{ServiceFormat, ServiceRef, TileRequest};
 use mantle_cache::StubCacheClient;
 use mantle_catalog::StubCatalogClient;
 use mantle_config::{CacheConfig, CatalogConfig, StorageConfig};
@@ -67,17 +67,17 @@ async fn tile_latency_p99_under_10ms() {
     .expect("engine");
 
     let fixture_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
-    let dataset = DatasetRef {
+    let service = ServiceRef {
         id: fixture_id,
         name: "latency-fixture".into(),
-        format: DatasetFormat::Cog,
+        format: ServiceFormat::Cog,
         storage_uri: std::env::var(env::COG_URI)
             .unwrap_or_else(|_| "s3://mantle-data/fixtures/sample.tif".into()),
         crs: Some("EPSG:4326".into()),
         geometry_wkt: None,
     };
     let warm_request = TileRequest {
-        dataset_id: fixture_id,
+        service_id: fixture_id,
         z: 10,
         x: 512,
         y: 384,
@@ -85,7 +85,7 @@ async fn tile_latency_p99_under_10ms() {
         render_rule: None,
     };
     let _ = engine
-        .render_tile(&[dataset.clone()], &warm_request, TileFormat::WebP)
+        .render_tile(&[service.clone()], &warm_request, TileFormat::WebP)
         .await
         .expect("warm tile");
 
@@ -93,7 +93,7 @@ async fn tile_latency_p99_under_10ms() {
     for _ in 0..CONCURRENCY {
         let start = Instant::now();
         engine
-            .render_tile(&[dataset.clone()], &warm_request, TileFormat::WebP)
+            .render_tile(&[service.clone()], &warm_request, TileFormat::WebP)
             .await
             .expect("tile");
         latencies.push(start.elapsed());

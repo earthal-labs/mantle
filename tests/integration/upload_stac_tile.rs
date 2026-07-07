@@ -15,7 +15,7 @@ async fn upload_stac_search_tile_flow() {
         .map(PathBuf::from)
         .expect("set MANTLE_TEST_COG_PATH to a local COG GeoTIFF");
 
-    let dataset_id = stack::upload_cog_fixture("integration-upload", &cog_path).await;
+    let service_id = stack::upload_cog_fixture("integration-upload", &cog_path).await;
 
     let search = stack::stac_search_bbox("-180,-90,180,90").await;
     let features = search["features"]
@@ -25,13 +25,13 @@ async fn upload_stac_search_tile_flow() {
         features.iter().any(|f| {
             f["id"]
                 .as_str()
-                .map(|id| id == dataset_id.to_string())
+                .map(|id| id == service_id.to_string())
                 .unwrap_or(false)
         }),
-        "STAC search did not return uploaded dataset {dataset_id}"
+        "STAC search did not return uploaded service {service_id}"
     );
 
-    let tile = stack::fetch_tile(dataset_id, 10, 512, 384).await;
+    let tile = stack::fetch_tile(service_id, 10, 512, 384).await;
     let status = tile.status();
     let content_type = tile
         .headers()

@@ -9,7 +9,7 @@ use crate::storage::{build_object_store, parse_storage_uri};
 use crate::tile_math::{tile_bounds_web_mercator, TILE_SIZE};
 use crate::{CogDebugInfo, RasterEngine, RasterError, TileFormat};
 use async_trait::async_trait;
-use mantle_arrow::{DatasetFormat, DatasetRef, TileRequest};
+use mantle_arrow::{ServiceFormat, ServiceRef, TileRequest};
 use mantle_cache::CacheClient;
 use mantle_catalog::{CatalogClient, SpatialQuery};
 use mantle_config::{CacheConfig, StorageConfig};
@@ -31,7 +31,7 @@ use tracing::{debug, warn};
 ///   Eliminates the repeated-parsing cost of opening the same COG on every
 ///   tile request.
 /// - `cache` (Redis, via `CacheClient::get_tile`/`set_tile`): the fully
-///   encoded output tile, keyed by dataset(s)/z/x/y/band/render_rule/format.
+///   encoded output tile, keyed by service(s)/z/x/y/band/render_rule/format.
 ///   A hit here skips rendering entirely — this is what gets a warm request
 ///   down to a single Redis round trip.
 pub struct OxigdalRasterEngine {
@@ -83,13 +83,13 @@ impl OxigdalRasterEngine {
         }
     }
 
-    async fn resolve_datasets(
+    async fn resolve_services(
         &self,
-        datasets: &[DatasetRef],
+        services: &[ServiceRef],
         request: &TileRequest,
-    ) -> Result<Vec<DatasetRef>, RasterError> {
-        if !datasets.is_empty() {
-            return Ok(datasets.to_vec());
+    ) -> Result<Vec<ServiceRef>, RasterError> {
+        if !services.is_empty() {
+            return Ok(services.to_vec());
         }
 
         let bounds = tile_bounds_web_mercator(request.z, request.x, request.y);
@@ -102,19 +102,19 @@ impl OxigdalRasterEngine {
             .map_err(RasterError::Catalog)
     }
 
-    async fn read_dataset_layer(
+    async fn read_service_layer(
         &self,
-        dataset: &DatasetRef,
+        service: &ServiceRef,
         tile_bounds: &crate::tile_math::TileBounds,
         band: u32,
     ) -> Result<Option<TileLayer>, RasterError> {
-        if dataset.format != DatasetFormat::Cog {
-            debug!(dataset_id = %dataset.id, "skipping non-COG dataset");
+        if service.format != ServiceFormat::Cog {
+            debug!(service_id = %service.id, "skipping non-COG service");
             return Ok(None);
         }
 
         let _ = band; // band index reserved for multi-band COG reads
-        let (_bucket, s3_key) = parse_storage_uri(&dataset.storage_uri, &self.storage.bucket)?;
+        let (_bucket, s3_key) = parse_storage_uri(&service.storage_uri, &self.storage.bucket)?;
 
         let values = render_tile_layer(
             self.store.clone(),
@@ -136,7 +136,7 @@ impl OxigdalRasterEngine {
 
     async fn load_band_context(
         &self,
-        refs: &[DatasetRef],
+        refs: &[ServiceRef],
         band_refs: &[mantle_render_ast::BandRefKey],
         tile_bounds: &crate::tile_math::TileBounds,
     ) -> Result<BandContext, RasterError> {
@@ -144,22 +144,22 @@ impl OxigdalRasterEngine {
         let mut pixel_len = 0usize;
 
         for key in band_refs {
-            let dataset = refs
+            let service = refs
                 .iter()
-                .find(|d| d.id == key.dataset_id)
+                .find(|d| d.id == key.service_id)
                 .ok_or_else(|| {
                     RasterError::NotImplemented(format!(
-                        "dataset {} not in tile context",
-                        key.dataset_id
+                        "service {} not in tile context",
+                        key.service_id
                     ))
                 })?;
 
             if let Some(layer) = self
-                .read_dataset_layer(dataset, tile_bounds, key.band)
+                .read_service_layer(service, tile_bounds, key.band)
                 .await?
             {
                 pixel_len = layer.values.len();
-                bands.insert((key.dataset_id, key.band), layer.values);
+                bands.insert((key.service_id, key.band), layer.values);
             }
         }
 
@@ -168,7 +168,7 @@ impl OxigdalRasterEngine {
 
     async fn render_ast_tile(
         &self,
-        refs: &[DatasetRef],
+        refs: &[ServiceRef],
         request: &TileRequest,
         format: TileFormat,
         expr: &Expr,
@@ -192,7 +192,7 @@ impl OxigdalRasterEngine {
 
     async fn render_simd_ast(
         &self,
-        refs: &[DatasetRef],
+        refs: &[ServiceRef],
         format: TileFormat,
         expr: &Expr,
         tile_bounds: &crate::tile_math::TileBounds,
@@ -210,7 +210,7 @@ impl OxigdalRasterEngine {
 
     async fn render_mosaic_ast(
         &self,
-        refs: &[DatasetRef],
+        refs: &[ServiceRef],
         request: &TileRequest,
         format: TileFormat,
         expr: &Expr,
@@ -223,12 +223,12 @@ impl OxigdalRasterEngine {
             ));
         };
 
-        let mosaic_refs = self.resolve_mosaic_datasets(refs, request).await?;
+        let mosaic_refs = self.resolve_mosaic_services(refs, request).await?;
 
         let band = request.band.unwrap_or(1);
         let mut layers = Vec::new();
-        for dataset in &mosaic_refs {
-            if let Some(layer) = self.read_dataset_layer(dataset, tile_bounds, band).await? {
+        for service in &mosaic_refs {
+            if let Some(layer) = self.read_service_layer(service, tile_bounds, band).await? {
                 layers.push(layer);
             }
         }
@@ -241,11 +241,11 @@ impl OxigdalRasterEngine {
         self.encode_scalar_tile(&merged.values, expr, format)
     }
 
-    async fn resolve_mosaic_datasets(
+    async fn resolve_mosaic_services(
         &self,
-        refs: &[DatasetRef],
+        refs: &[ServiceRef],
         request: &TileRequest,
-    ) -> Result<Vec<DatasetRef>, RasterError> {
+    ) -> Result<Vec<ServiceRef>, RasterError> {
         if !refs.is_empty() {
             return Ok(refs.to_vec());
         }
@@ -276,7 +276,7 @@ impl OxigdalRasterEngine {
 
     async fn render_tile_uncached(
         &self,
-        refs: &[DatasetRef],
+        refs: &[ServiceRef],
         request: &TileRequest,
         format: TileFormat,
         tile_bounds: &crate::tile_math::TileBounds,
@@ -293,8 +293,8 @@ impl OxigdalRasterEngine {
         let colormap = parse_colormap(request.render_rule.as_deref());
 
         let mut layers = Vec::new();
-        for dataset in refs {
-            if let Some(layer) = self.read_dataset_layer(dataset, tile_bounds, band).await? {
+        for service in refs {
+            if let Some(layer) = self.read_service_layer(service, tile_bounds, band).await? {
                 layers.push(layer);
             }
         }
@@ -311,10 +311,10 @@ impl OxigdalRasterEngine {
 }
 
 /// Cache key for the encoded-output-tile cache: stable across the same
-/// resolved dataset set + request params + format, regardless of whether the
-/// caller passed `dataset_id` explicitly or datasets were resolved via
+/// resolved service set + request params + format, regardless of whether the
+/// caller passed `service_id` explicitly or services were resolved via
 /// spatial query (hence sorting — resolution order isn't guaranteed stable).
-fn tile_cache_key(refs: &[DatasetRef], request: &TileRequest, format: TileFormat) -> String {
+fn tile_cache_key(refs: &[ServiceRef], request: &TileRequest, format: TileFormat) -> String {
     let mut ids: Vec<String> = refs.iter().map(|d| d.id.to_string()).collect();
     ids.sort_unstable();
     format!(
@@ -333,12 +333,12 @@ fn tile_cache_key(refs: &[DatasetRef], request: &TileRequest, format: TileFormat
 impl RasterEngine for OxigdalRasterEngine {
     async fn render_tile(
         &self,
-        datasets: &[DatasetRef],
+        services: &[ServiceRef],
         request: &TileRequest,
         format: TileFormat,
     ) -> Result<Vec<u8>, RasterError> {
         let tile_bounds = tile_bounds_web_mercator(request.z, request.x, request.y);
-        let refs = self.resolve_datasets(datasets, request).await?;
+        let refs = self.resolve_services(services, request).await?;
         let cache_key = tile_cache_key(&refs, request, format);
 
         match self.cache.get_tile(&cache_key).await {
@@ -364,14 +364,14 @@ impl RasterEngine for OxigdalRasterEngine {
 
     async fn read_tile_bands(
         &self,
-        dataset: &DatasetRef,
+        service: &ServiceRef,
         request: &TileRequest,
         band_indices: &[u32],
     ) -> Result<Vec<TileLayer>, RasterError> {
         let tile_bounds = tile_bounds_web_mercator(request.z, request.x, request.y);
         let mut layers = Vec::with_capacity(band_indices.len());
         for &band in band_indices {
-            if let Some(layer) = self.read_dataset_layer(dataset, &tile_bounds, band).await? {
+            if let Some(layer) = self.read_service_layer(service, &tile_bounds, band).await? {
                 layers.push(layer);
             } else {
                 layers.push(TileLayer::transparent(TILE_SIZE, TILE_SIZE));
@@ -380,13 +380,13 @@ impl RasterEngine for OxigdalRasterEngine {
         Ok(layers)
     }
 
-    async fn debug_metadata(&self, dataset: &DatasetRef) -> Result<CogDebugInfo, RasterError> {
-        if dataset.format != DatasetFormat::Cog {
+    async fn debug_metadata(&self, service: &ServiceRef) -> Result<CogDebugInfo, RasterError> {
+        if service.format != ServiceFormat::Cog {
             return Err(RasterError::NotImplemented(
-                "debug_metadata only supports COG datasets".into(),
+                "debug_metadata only supports COG services".into(),
             ));
         }
-        let (_bucket, s3_key) = parse_storage_uri(&dataset.storage_uri, &self.storage.bucket)?;
+        let (_bucket, s3_key) = parse_storage_uri(&service.storage_uri, &self.storage.bucket)?;
         cog_debug_metadata(self.store.clone(), self.byte_cache.clone(), &s3_key).await
     }
 }
@@ -410,7 +410,7 @@ impl StubRasterEngine {
 impl RasterEngine for StubRasterEngine {
     async fn render_tile(
         &self,
-        _datasets: &[DatasetRef],
+        _services: &[ServiceRef],
         _request: &TileRequest,
         format: TileFormat,
     ) -> Result<Vec<u8>, RasterError> {
@@ -419,7 +419,7 @@ impl RasterEngine for StubRasterEngine {
 
     async fn read_tile_bands(
         &self,
-        _dataset: &DatasetRef,
+        _service: &ServiceRef,
         _request: &TileRequest,
         band_indices: &[u32],
     ) -> Result<Vec<TileLayer>, RasterError> {
@@ -429,7 +429,7 @@ impl RasterEngine for StubRasterEngine {
             .collect())
     }
 
-    async fn debug_metadata(&self, _dataset: &DatasetRef) -> Result<CogDebugInfo, RasterError> {
+    async fn debug_metadata(&self, _service: &ServiceRef) -> Result<CogDebugInfo, RasterError> {
         Err(RasterError::NotImplemented(
             "debug_metadata not supported by stub engine".into(),
         ))

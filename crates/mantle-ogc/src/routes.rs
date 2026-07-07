@@ -17,7 +17,7 @@ use axum::{
     Json, Router,
 };
 use geo_types::Coord;
-use mantle_arrow::{DatasetRef, TileRequest};
+use mantle_arrow::{ServiceRef, TileRequest};
 use mantle_cache::JobQueueClient;
 use mantle_catalog::{CatalogClient, CatalogError, SpatialQuery};
 use mantle_raster::{tile_bounds_web_mercator, RasterEngine, TileFormat};
@@ -82,7 +82,7 @@ where
 #[derive(Debug, Deserialize)]
 pub struct OgcTileQuery {
     pub collection_id: Option<String>,
-    pub dataset_id: Option<Uuid>,
+    pub service_id: Option<Uuid>,
     pub format: Option<String>,
     pub band: Option<u32>,
     pub render: Option<String>,
@@ -110,7 +110,7 @@ pub struct ProcessExecutionBody {
     #[serde(default)]
     pub inputs: serde_json::Value,
     #[serde(default)]
-    pub datasets: Vec<Uuid>,
+    pub services: Vec<Uuid>,
 }
 
 async fn get_ogc_tile<S>(
@@ -175,20 +175,20 @@ where
     request.band = params.band;
     request.render_rule = params.render;
 
-    if let Some(dataset_id) = params.dataset_id {
-        request.dataset_id = dataset_id;
+    if let Some(service_id) = params.service_id {
+        request.service_id = service_id;
     }
 
-    let datasets = resolve_tile_datasets(
+    let services = resolve_tile_services(
         catalog.as_ref(),
         &route.collection_id,
-        params.dataset_id,
+        params.service_id,
         &request,
     )
     .await?;
 
     let bytes = raster
-        .render_tile(&datasets, &request, format)
+        .render_tile(&services, &request, format)
         .await
         .map_err(|err| {
             warn!(error = %err, "raster tile render failed");
@@ -248,10 +248,10 @@ where
     };
 
     let OgcState { catalog, jobs, .. } = OgcState::from_ref(&state);
-    let datasets = resolve_edr_datasets(catalog.as_ref(), &collection_id, lon, lat).await?;
+    let services = resolve_edr_services(catalog.as_ref(), &collection_id, lon, lat).await?;
 
     if params.r#async {
-        let job = job_spec_from_edr(&query, datasets);
+        let job = job_spec_from_edr(&query, services);
         let job_id = job.job_id;
         jobs.enqueue_job(&job)
             .await
@@ -266,11 +266,11 @@ where
             .into_response());
     }
 
-    if datasets.is_empty() {
+    if services.is_empty() {
         return Ok((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
-                "error": "no datasets intersect the requested point",
+                "error": "no services intersect the requested point",
                 "hint": "retry with ?async=true to enqueue a Ray extraction job"
             })),
         )
@@ -364,7 +364,7 @@ where
         warn!(process_id = %process_id, "plugin schema unavailable; skipping input validation");
     }
 
-    let dataset_refs = resolve_process_datasets(catalog.as_ref(), &body.datasets)
+    let service_refs = resolve_process_services(catalog.as_ref(), &body.services)
         .await
         .map_err(catalog_to_status)?;
 
@@ -372,7 +372,7 @@ where
         process_id: process_id.clone(),
         inputs: body.inputs,
     };
-    let job = job_spec_from_process(&request, dataset_refs);
+    let job = job_spec_from_process(&request, service_refs);
     let job_id = job.job_id;
 
     jobs.enqueue_job(&job)
@@ -416,26 +416,26 @@ async fn fetch_plugin_descriptor(
     })
 }
 
-async fn resolve_tile_datasets(
+async fn resolve_tile_services(
     catalog: &dyn CatalogClient,
     collection_id: &str,
-    explicit_dataset_id: Option<Uuid>,
+    explicit_service_id: Option<Uuid>,
     request: &TileRequest,
-) -> Result<Vec<DatasetRef>, StatusCode> {
-    if let Some(id) = explicit_dataset_id {
+) -> Result<Vec<ServiceRef>, StatusCode> {
+    if let Some(id) = explicit_service_id {
         let record = catalog
-            .get_dataset(id)
+            .get_service(id)
             .await
             .map_err(catalog_to_status)?;
-        return Ok(vec![record.to_dataset_ref()]);
+        return Ok(vec![record.to_service_ref()]);
     }
 
     if let Ok(id) = Uuid::parse_str(collection_id) {
         let record = catalog
-            .get_dataset(id)
+            .get_service(id)
             .await
             .map_err(catalog_to_status)?;
-        return Ok(vec![record.to_dataset_ref()]);
+        return Ok(vec![record.to_service_ref()]);
     }
 
     if collection_id == DEFAULT_COLLECTION_ID {
@@ -452,12 +452,12 @@ async fn resolve_tile_datasets(
     Err(StatusCode::NOT_FOUND)
 }
 
-async fn resolve_edr_datasets(
+async fn resolve_edr_services(
     catalog: &dyn CatalogClient,
     collection_id: &str,
     lon: f64,
     lat: f64,
-) -> Result<Vec<DatasetRef>, StatusCode> {
+) -> Result<Vec<ServiceRef>, StatusCode> {
     let delta = 0.001;
     let bbox = geo_types::Rect::new(
         Coord { x: lon - delta, y: lat - delta },
@@ -466,10 +466,10 @@ async fn resolve_edr_datasets(
 
     if let Ok(id) = Uuid::parse_str(collection_id) {
         let record = catalog
-            .get_dataset(id)
+            .get_service(id)
             .await
             .map_err(catalog_to_status)?;
-        return Ok(vec![record.to_dataset_ref()]);
+        return Ok(vec![record.to_service_ref()]);
     }
 
     if collection_id == DEFAULT_COLLECTION_ID {
@@ -485,14 +485,14 @@ async fn resolve_edr_datasets(
     Err(StatusCode::NOT_FOUND)
 }
 
-async fn resolve_process_datasets(
+async fn resolve_process_services(
     catalog: &dyn CatalogClient,
-    dataset_ids: &[Uuid],
-) -> Result<Vec<DatasetRef>, CatalogError> {
-    let mut refs = Vec::with_capacity(dataset_ids.len());
-    for id in dataset_ids {
-        let record = catalog.get_dataset(*id).await?;
-        refs.push(record.to_dataset_ref());
+    service_ids: &[Uuid],
+) -> Result<Vec<ServiceRef>, CatalogError> {
+    let mut refs = Vec::with_capacity(service_ids.len());
+    for id in service_ids {
+        let record = catalog.get_service(*id).await?;
+        refs.push(record.to_service_ref());
     }
     Ok(refs)
 }
@@ -607,7 +607,7 @@ mod tests {
         };
         let id = Uuid::new_v4();
         let req = route.to_tile_request(id);
-        assert_eq!(req.dataset_id, id);
+        assert_eq!(req.service_id, id);
         assert_eq!(req.z, 12);
         assert_eq!(req.x, 200);
         assert_eq!(req.y, 100);
@@ -642,7 +642,7 @@ mod tests {
         let state = app.clone();
         let body = ProcessExecutionBody {
             inputs: serde_json::json!({"red_band": 1}),
-            datasets: vec![],
+            services: vec![],
         };
         let result = execute_process(
             State(state),
@@ -657,7 +657,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edr_position_without_datasets_returns_not_found() {
+    async fn edr_position_without_services_returns_not_found() {
         let app = test_app();
         let params = EdrPositionQuery {
             coords: "-122.4,37.8".into(),

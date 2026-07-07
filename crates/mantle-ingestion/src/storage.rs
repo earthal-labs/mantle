@@ -72,17 +72,17 @@ pub async fn delete_by_storage_uri(
     }
 }
 
-pub fn dataset_object_key(dataset_id: uuid::Uuid, filename: &str) -> String {
+pub fn service_object_key(service_id: uuid::Uuid, filename: &str) -> String {
     let safe_name = sanitize_filename(filename);
-    format!("datasets/{dataset_id}/{safe_name}")
+    format!("services/{service_id}/{safe_name}")
 }
 
 pub fn storage_uri(bucket: &str, key: &str) -> String {
     format!("s3://{bucket}/{key}")
 }
 
-pub fn icechunk_repo_uri(bucket: &str, dataset_id: uuid::Uuid) -> String {
-    format!("s3://{bucket}/icechunk/{dataset_id}")
+pub fn icechunk_repo_uri(bucket: &str, service_id: uuid::Uuid) -> String {
+    format!("s3://{bucket}/icechunk/{service_id}")
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -155,11 +155,11 @@ mod tests {
     }
 
     #[test]
-    fn dataset_key_includes_uuid() {
+    fn service_key_includes_uuid() {
         let id = uuid::Uuid::nil();
         assert_eq!(
-            dataset_object_key(id, "scene.tif"),
-            "datasets/00000000-0000-0000-0000-000000000000/scene.tif"
+            service_object_key(id, "scene.tif"),
+            "services/00000000-0000-0000-0000-000000000000/scene.tif"
         );
     }
 }

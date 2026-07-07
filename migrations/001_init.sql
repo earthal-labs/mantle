@@ -3,7 +3,7 @@
 
 CREATE EXTENSION IF NOT EXISTS postgis;
 
-CREATE TABLE IF NOT EXISTS datasets (
+CREATE TABLE IF NOT EXISTS services (
     id              UUID PRIMARY KEY,
     name            TEXT NOT NULL,
     format          TEXT NOT NULL CHECK (format IN ('cog', 'icechunk')),
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS datasets (
 
 CREATE TABLE IF NOT EXISTS footprints (
     id              BIGSERIAL PRIMARY KEY,
-    dataset_id      UUID NOT NULL REFERENCES datasets(id),
+    service_id      UUID NOT NULL REFERENCES services(id),
     geometry        GEOMETRY NOT NULL,
     cloud_cover     DOUBLE PRECISION,
     partition_key   TEXT NOT NULL,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS footprints (
 );
 
 CREATE INDEX IF NOT EXISTS footprints_geometry_idx ON footprints USING GIST (geometry);
-CREATE INDEX IF NOT EXISTS footprints_dataset_id_idx ON footprints (dataset_id);
+CREATE INDEX IF NOT EXISTS footprints_service_id_idx ON footprints (service_id);
 CREATE INDEX IF NOT EXISTS footprints_partition_key_idx ON footprints (partition_key);
 
 -- Append-only: no UPDATE/DELETE triggers enforced at application layer.

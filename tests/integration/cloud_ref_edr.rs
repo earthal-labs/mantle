@@ -12,10 +12,10 @@ async fn cloud_ref_edr_point_query_flow() {
     let netcdf_uri = std::env::var(mantle_integration::env::NETCDF_URI)
         .expect("set MANTLE_TEST_NETCDF_URI to a reachable NetCDF/HDF5 object");
 
-    let dataset_id =
+    let service_id =
         stack::register_cloud_reference("integration-netcdf", &netcdf_uri).await;
 
-    let response = stack::edr_position(&dataset_id.to_string(), "-122.4,37.8").await;
+    let response = stack::edr_position(&service_id.to_string(), "-122.4,37.8").await;
     assert!(
         response.status().is_success(),
         "EDR position: {} {:?}",

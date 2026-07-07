@@ -1,18 +1,18 @@
 use crate::ducklake::DuckLakeSession;
 use crate::error::CatalogError;
-use crate::postgres::{fetch_dataset, fetch_dataset_any, insert_dataset, insert_footprint_row};
+use crate::postgres::{fetch_service, fetch_service_any, insert_footprint_row, insert_service};
 use crate::services::sanitize_slug;
 use crate::virtual_services::{
-    attach_function_to_dataset, fetch_virtual_service_by_slug, insert_virtual_service,
-    slug_exists,
+    attach_function_to_service, fetch_virtual_service_by_slug, fetch_virtual_services,
+    insert_virtual_service, slug_exists,
 };
 use crate::{
-    DatasetRecord, DeletionRecord, FootprintRecord, SpatialQuery, VirtualServiceKind,
+    DeletionRecord, FootprintRecord, ServiceRecord, SpatialQuery, VirtualServiceKind,
     VirtualServiceRecord,
 };
 use chrono::{DateTime, Utc};
 use async_trait::async_trait;
-use mantle_arrow::DatasetRef;
+use mantle_arrow::ServiceRef;
 use mantle_config::CatalogConfig;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 /// DuckLake + Postgres catalog client.
 ///
-/// Postgres holds transactional dataset/footprint rows; DuckLake stores append-only
+/// Postgres holds transactional service/footprint rows; DuckLake stores append-only
 /// GeoParquet V2 partitions keyed by acquisition month for spatial predicate pushdown.
 pub struct PostgresDuckLakeCatalog {
     pool: PgPool,
@@ -49,16 +49,16 @@ impl PostgresDuckLakeCatalog {
         &self.config
     }
 
-    fn validate_append_only(dataset: &DatasetRecord, footprint: &FootprintRecord) -> Result<(), CatalogError> {
+    fn validate_append_only(service: &ServiceRecord, footprint: &FootprintRecord) -> Result<(), CatalogError> {
         if footprint.geometry_wkt.trim().is_empty() {
             return Err(CatalogError::InvalidGeometry(
                 "footprint geometry_wkt must not be empty".into(),
             ));
         }
-        if footprint.dataset_id != dataset.id {
+        if footprint.service_id != service.id {
             return Err(CatalogError::AppendOnlyViolation(format!(
-                "footprint.dataset_id {} does not match dataset.id {}",
-                footprint.dataset_id, dataset.id
+                "footprint.service_id {} does not match service.id {}",
+                footprint.service_id, service.id
             )));
         }
         Ok(())
@@ -69,26 +69,26 @@ impl PostgresDuckLakeCatalog {
 impl crate::CatalogClient for PostgresDuckLakeCatalog {
     async fn insert_footprint(
         &self,
-        dataset: DatasetRecord,
+        service: ServiceRecord,
         footprint: FootprintRecord,
     ) -> Result<Uuid, CatalogError> {
-        Self::validate_append_only(&dataset, &footprint)?;
+        Self::validate_append_only(&service, &footprint)?;
 
-        let partition_key = crate::ducklake::resolve_partition_key(&footprint, &dataset);
+        let partition_key = crate::ducklake::resolve_partition_key(&footprint, &service);
         let mut footprint = footprint;
         footprint.partition_key = partition_key.clone();
 
         let mut tx = self.pool.begin().await?;
-        insert_dataset(&mut *tx, &dataset).await?;
+        insert_service(&mut *tx, &service).await?;
 
         let ducklake = self.ducklake.clone();
-        let dataset_for_duck = dataset.clone();
+        let service_for_duck = service.clone();
         let footprint_for_duck = footprint.clone();
         let partition_for_duck = partition_key.clone();
 
         let parquet_uri = tokio::task::spawn_blocking(move || {
             ducklake.append_footprint_parquet(
-                &dataset_for_duck,
+                &service_for_duck,
                 &footprint_for_duck,
                 &partition_for_duck,
             )
@@ -100,36 +100,36 @@ impl crate::CatalogClient for PostgresDuckLakeCatalog {
         tx.commit().await?;
 
         info!(
-            dataset_id = %dataset.id,
+            service_id = %service.id,
             footprint_id,
             partition_key = %footprint.partition_key,
             parquet_uri = %parquet_uri,
             "append-only footprint inserted"
         );
 
-        Ok(dataset.id)
+        Ok(service.id)
     }
 
-    async fn spatial_query(&self, query: SpatialQuery) -> Result<Vec<DatasetRef>, CatalogError> {
+    async fn spatial_query(&self, query: SpatialQuery) -> Result<Vec<ServiceRef>, CatalogError> {
         let ducklake = self.ducklake.clone();
         tokio::task::spawn_blocking(move || ducklake.spatial_query(&query))
             .await
             .map_err(|e| CatalogError::Config(format!("ducklake task join: {e}")))?
     }
 
-    async fn get_dataset(&self, id: Uuid) -> Result<DatasetRecord, CatalogError> {
-        fetch_dataset(&self.pool, id).await
+    async fn get_service(&self, id: Uuid) -> Result<ServiceRecord, CatalogError> {
+        fetch_service(&self.pool, id).await
     }
 
     async fn attach_function(
         &self,
-        dataset_id: Uuid,
+        service_id: Uuid,
         function_id: String,
         params_defaults: serde_json::Value,
         endpoint_slug: Option<String>,
     ) -> Result<VirtualServiceRecord, CatalogError> {
-        let parent = fetch_dataset(&self.pool, dataset_id).await?;
-        attach_function_to_dataset(
+        let parent = fetch_service(&self.pool, service_id).await?;
+        attach_function_to_service(
             &self.pool,
             &parent,
             function_id,
@@ -146,14 +146,21 @@ impl crate::CatalogClient for PostgresDuckLakeCatalog {
         fetch_virtual_service_by_slug(&self.pool, slug).await
     }
 
+    async fn list_virtual_services(
+        &self,
+        service_id: Option<Uuid>,
+    ) -> Result<Vec<VirtualServiceRecord>, CatalogError> {
+        fetch_virtual_services(&self.pool, service_id).await
+    }
+
     async fn register_output_service(
         &self,
-        output_dataset: DatasetRecord,
+        output_service: ServiceRecord,
         function_id: String,
         endpoint_slug: String,
     ) -> Result<VirtualServiceRecord, CatalogError> {
         let mut tx = self.pool.begin().await?;
-        insert_dataset(&mut *tx, &output_dataset).await?;
+        insert_service(&mut *tx, &output_service).await?;
         let record = {
             let slug = sanitize_slug(&endpoint_slug);
             if slug_exists(&self.pool, &slug).await? {
@@ -163,8 +170,8 @@ impl crate::CatalogClient for PostgresDuckLakeCatalog {
                 id: Uuid::new_v4(),
                 slug,
                 service_kind: VirtualServiceKind::Output,
-                dataset_id: output_dataset.id,
-                parent_dataset_id: None,
+                service_id: output_service.id,
+                parent_service_id: None,
                 function_id,
                 params_defaults: serde_json::json!({}),
                 created_at: Utc::now(),
@@ -176,25 +183,25 @@ impl crate::CatalogClient for PostgresDuckLakeCatalog {
         Ok(record)
     }
 
-    async fn soft_delete_dataset(
+    async fn soft_delete_service(
         &self,
-        dataset_id: Uuid,
+        service_id: Uuid,
         reason: Option<String>,
     ) -> Result<DeletionRecord, CatalogError> {
-        // Ensure the dataset exists at all (any state) before tombstoning it.
-        fetch_dataset_any(&self.pool, dataset_id).await?;
+        // Ensure the service exists at all (any state) before tombstoning it.
+        fetch_service_any(&self.pool, service_id).await?;
 
         let mut tx = self.pool.begin().await?;
 
         let inserted: Option<DateTime<Utc>> = sqlx::query_scalar(
             r#"
-            INSERT INTO dataset_deletions (dataset_id, reason)
+            INSERT INTO service_deletions (service_id, reason)
             VALUES ($1, $2)
-            ON CONFLICT (dataset_id) DO NOTHING
+            ON CONFLICT (service_id) DO NOTHING
             RETURNING deleted_at
             "#,
         )
-        .bind(dataset_id)
+        .bind(service_id)
         .bind(&reason)
         .fetch_optional(&mut *tx)
         .await?;
@@ -205,9 +212,9 @@ impl crate::CatalogClient for PostgresDuckLakeCatalog {
             Some(ts) => ts,
             None => {
                 sqlx::query_scalar(
-                    "SELECT deleted_at FROM dataset_deletions WHERE dataset_id = $1",
+                    "SELECT deleted_at FROM service_deletions WHERE service_id = $1",
                 )
-                .bind(dataset_id)
+                .bind(service_id)
                 .fetch_one(&mut *tx)
                 .await?
             }
@@ -216,10 +223,10 @@ impl crate::CatalogClient for PostgresDuckLakeCatalog {
         sqlx::query(
             r#"
             UPDATE virtual_services SET deleted_at = now()
-            WHERE (dataset_id = $1 OR parent_dataset_id = $1) AND deleted_at IS NULL
+            WHERE (service_id = $1 OR parent_service_id = $1) AND deleted_at IS NULL
             "#,
         )
-        .bind(dataset_id)
+        .bind(service_id)
         .execute(&mut *tx)
         .await?;
 
@@ -229,49 +236,49 @@ impl crate::CatalogClient for PostgresDuckLakeCatalog {
             deleted_at + chrono::Duration::days(self.config.purge_retention_days as i64);
 
         Ok(DeletionRecord {
-            dataset_id,
+            service_id,
             deleted_at,
             purge_eligible_at,
         })
     }
 
-    async fn get_dataset_any(&self, id: Uuid) -> Result<DatasetRecord, CatalogError> {
-        fetch_dataset_any(&self.pool, id).await
+    async fn get_service_any(&self, id: Uuid) -> Result<ServiceRecord, CatalogError> {
+        fetch_service_any(&self.pool, id).await
     }
 
-    async fn purge_dataset(&self, dataset_id: Uuid) -> Result<(), CatalogError> {
+    async fn purge_service(&self, service_id: Uuid) -> Result<(), CatalogError> {
         let ducklake = self.ducklake.clone();
-        tokio::task::spawn_blocking(move || ducklake.purge_dataset(dataset_id))
+        tokio::task::spawn_blocking(move || ducklake.purge_service(service_id))
             .await
             .map_err(|e| CatalogError::Config(format!("ducklake task join: {e}")))??;
 
         let mut tx = self.pool.begin().await?;
         // Narrow, session-scoped bypass of the append-only trigger — see
-        // migrations/004_dataset_deletion.sql. Ordinary connections never set
+        // migrations/004_service_deletion.sql. Ordinary connections never set
         // this, so they remain fully blocked.
         sqlx::query("SET LOCAL mantle.allow_purge = 'on'")
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query("DELETE FROM virtual_services WHERE dataset_id = $1 OR parent_dataset_id = $1")
-            .bind(dataset_id)
+        sqlx::query("DELETE FROM virtual_services WHERE service_id = $1 OR parent_service_id = $1")
+            .bind(service_id)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM footprints WHERE dataset_id = $1")
-            .bind(dataset_id)
+        sqlx::query("DELETE FROM footprints WHERE service_id = $1")
+            .bind(service_id)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM datasets WHERE id = $1")
-            .bind(dataset_id)
+        sqlx::query("DELETE FROM services WHERE id = $1")
+            .bind(service_id)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("UPDATE dataset_deletions SET purged_at = now() WHERE dataset_id = $1")
-            .bind(dataset_id)
+        sqlx::query("UPDATE service_deletions SET purged_at = now() WHERE service_id = $1")
+            .bind(service_id)
             .execute(&mut *tx)
             .await?;
 
         tx.commit().await?;
-        info!(%dataset_id, "dataset purged");
+        info!(%service_id, "service purged");
         Ok(())
     }
 }

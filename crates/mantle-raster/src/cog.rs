@@ -24,7 +24,7 @@ use rayon::prelude::*;
 use std::sync::Arc;
 use tracing::warn;
 
-/// Reports what oxigdal actually detects for a dataset (CRS, geotransform,
+/// Reports what oxigdal actually detects for a service (CRS, geotransform,
 /// dimensions, tiling) without rendering a tile — the direct answer to "why
 /// is this tile blank" without log-grepping or guessing tile coordinates.
 pub async fn debug_metadata(
@@ -69,7 +69,7 @@ pub async fn debug_metadata(
     .map_err(|e| RasterError::Cog(format!("blocking task join: {e}")))?
 }
 
-/// Reprojects the dataset's four pixel-extent corners (upper-left,
+/// Reprojects the service's four pixel-extent corners (upper-left,
 /// upper-right, lower-right, lower-left, then upper-left again to close the
 /// ring) from its native CRS to EPSG:4326, so callers get a ready-to-draw
 /// footprint without needing their own CRS transform. Returns `None` if the
@@ -100,7 +100,7 @@ fn compute_wgs84_footprint(
     Some(ring)
 }
 
-/// Fetch, reproject, and resample a dataset's pixels onto a `TILE_SIZE` x
+/// Fetch, reproject, and resample a service's pixels onto a `TILE_SIZE` x
 /// `TILE_SIZE` Web Mercator grid covering `tile_bounds`. Returns `None` when
 /// the source has no usable georeferencing (unknown CRS/geotransform) or the
 /// tile doesn't overlap the source's pixel extent at all.
