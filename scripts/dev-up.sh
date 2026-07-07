@@ -44,7 +44,7 @@ Mantle dev stack is up.
   Python:     cd python && uv sync --extra dev && uv run pytest
 
 Upload a COG then tile:
-  curl -X POST "${API_URL}/admin/datasets/upload" \\
+  curl -X POST "${API_URL}/admin/services/upload" \\
     -H "Authorization: Bearer \${MANTLE_ADMIN_TOKEN:-dev-admin-token}" \\
     -F "name=demo" -F "file=@/path/to/fixture.tif"
 

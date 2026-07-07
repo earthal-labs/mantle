@@ -16,7 +16,7 @@ $null = Invoke-RestMethod -Uri "${ApiUrl}/ogc/processes" -TimeoutSec 10
 Write-Host "ogc processes: ok"
 
 try {
-    Invoke-WebRequest -Uri "${ApiUrl}/admin/datasets/reference" -Method POST `
+    Invoke-WebRequest -Uri "${ApiUrl}/admin/services/reference" -Method POST `
         -ContentType "application/json" -Body '{"name":"x","storage_uri":"s3://mantle-data/x.tif"}' `
         -UseBasicParsing -TimeoutSec 10 | Out-Null
     throw "expected 401/403 without admin token"
@@ -29,7 +29,7 @@ try {
 }
 
 try {
-    $resp = Invoke-WebRequest -Uri "${ApiUrl}/admin/datasets/reference" -Method POST `
+    $resp = Invoke-WebRequest -Uri "${ApiUrl}/admin/services/reference" -Method POST `
         -Headers @{ Authorization = "Bearer $AdminToken" } `
         -ContentType "application/json" -Body '{}' `
         -UseBasicParsing -TimeoutSec 10

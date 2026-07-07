@@ -30,7 +30,7 @@ curl_ok "/stac/collections" "stac collections"
 curl_ok "/ogc/processes" "ogc processes"
 
 # Admin route should reject missing auth
-status="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "${API_URL}/admin/datasets/reference" \
+status="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "${API_URL}/admin/services/reference" \
   -H "Content-Type: application/json" \
   -d '{"name":"x","storage_uri":"s3://mantle-data/x.tif"}')"
 if [[ "$status" != "401" && "$status" != "403" ]]; then
@@ -40,7 +40,7 @@ fi
 echo "admin auth gate: ${status} (expected)"
 
 # With token, empty body should fail validation (proves admin path reachable)
-status_auth="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "${API_URL}/admin/datasets/reference" \
+status_auth="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "${API_URL}/admin/services/reference" \
   -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{}')"
