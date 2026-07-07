@@ -141,6 +141,7 @@
         <label>service slug<input id="tile-slug" style="width:140px" /></label>
         <label>format<input id="tile-format" value="webp" style="width:60px" /></label>
         <button class="action" onclick="loadOverlay()">Load overlay</button>
+        <button class="action" onclick="zoomToDataset()">Zoom to dataset</button>
         <span id="tile-status" class="hint"></span>
       </div>
       <div id="map"></div>
@@ -365,7 +366,7 @@
     return `/tiles/{z}/{x}/{y}?dataset_id=${encodeURIComponent(datasetId)}&format=${encodeURIComponent(format)}`;
   }
 
-  function loadOverlay() {
+  async function loadOverlay() {
     if (overlay) map.removeLayer(overlay);
     const url = tileUrlTemplate();
     const statusEl = document.getElementById('tile-status');
@@ -383,6 +384,59 @@
     overlay.on('tileload', () => { loaded++; statusEl.textContent = `loaded ${loaded}, ${errored} error(s)`; });
     overlay.on('tileerror', () => { errored++; statusEl.textContent = `loaded ${loaded}, ${errored} error(s)`; });
     overlay.addTo(map);
+    await refreshFootprint();
+  }
+
+  // Resolves the dataset backing whatever's currently loaded — direct
+  // dataset_id in "raw dataset" mode, or the service's parent_dataset in
+  // "vRPM service" mode (attached functions render a parent COG's bands,
+  // so its real footprint is what matters for the outline/zoom).
+  async function resolveDatasetId() {
+    const mode = document.getElementById('tile-mode').value;
+    if (mode === 'service') {
+      const slug = document.getElementById('tile-slug').value.trim();
+      if (!slug) return null;
+      const res = await fetch(`/services/${encodeURIComponent(slug)}`);
+      if (!res.ok) return null;
+      const data = await asJson(res);
+      return data && data.parent_dataset && data.parent_dataset.id;
+    }
+    return document.getElementById('tile-dataset-id').value.trim() || null;
+  }
+
+  let footprintLayer = null;
+
+  // Draws the dataset's real footprint (from GET /admin/datasets/{id}/debug
+  // -> footprint_wgs84, reprojected server-side via oxigdal — the same
+  // source of truth the tile renderer itself uses, so it can't drift out of
+  // sync with what's actually drawn) as an outline over the loaded tiles.
+  async function refreshFootprint() {
+    if (footprintLayer) { map.removeLayer(footprintLayer); footprintLayer = null; }
+    const statusEl = document.getElementById('tile-status');
+    const datasetId = await resolveDatasetId();
+    if (!datasetId) return;
+    try {
+      const res = await fetch(`/admin/datasets/${datasetId}/debug`, { headers: authHeaders() });
+      if (!res.ok) {
+        statusEl.textContent += ' (footprint: admin token required or dataset not found)';
+        return;
+      }
+      const data = await asJson(res);
+      const ring = data && data.footprint_wgs84;
+      if (!ring || !ring.length) {
+        statusEl.textContent += ' (no footprint available — CRS/geotransform not detected)';
+        return;
+      }
+      const latlngs = ring.map(([lon, lat]) => [lat, lon]);
+      footprintLayer = L.polygon(latlngs, { color: '#ffb703', weight: 2, fill: false }).addTo(map);
+    } catch (e) {
+      statusEl.textContent += ' (footprint fetch failed: ' + e.message + ')';
+    }
+  }
+
+  async function zoomToDataset() {
+    if (!footprintLayer) await refreshFootprint();
+    if (footprintLayer) map.fitBounds(footprintLayer.getBounds());
   }
 
   // ---- plugins ----

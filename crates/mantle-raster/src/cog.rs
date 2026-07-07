@@ -45,6 +45,14 @@ pub async fn debug_metadata(
         let geo_transform = reader
             .geo_transform()
             .map_err(|e| RasterError::Cog(format!("read geo_transform: {e}")))?;
+        let epsg_code = reader.epsg_code();
+
+        let footprint_wgs84 = match (&geo_transform, epsg_code) {
+            (Some(gt), Some(epsg)) => {
+                compute_wgs84_footprint(gt, reader.width(), reader.height(), epsg)
+            }
+            _ => None,
+        };
 
         Ok(CogDebugInfo {
             width: reader.width(),
@@ -52,12 +60,44 @@ pub async fn debug_metadata(
             band_count: info.samples_per_pixel as u32,
             data_type: info.data_type().map(|d| format!("{d:?}")),
             tile_size: reader.tile_size(),
-            epsg_code: reader.epsg_code(),
+            epsg_code,
             geo_transform,
+            footprint_wgs84,
         })
     })
     .await
     .map_err(|e| RasterError::Cog(format!("blocking task join: {e}")))?
+}
+
+/// Reprojects the dataset's four pixel-extent corners (upper-left,
+/// upper-right, lower-right, lower-left, then upper-left again to close the
+/// ring) from its native CRS to EPSG:4326, so callers get a ready-to-draw
+/// footprint without needing their own CRS transform. Returns `None` if the
+/// native CRS can't be resolved or any corner fails to reproject.
+fn compute_wgs84_footprint(
+    geo_transform: &oxigdal::core_types::types::GeoTransform,
+    width: u64,
+    height: u64,
+    epsg: u32,
+) -> Option<Vec<[f64; 2]>> {
+    let transformer = CrsTransformer::new(format!("EPSG:{epsg}"), "EPSG:4326").ok()?;
+    let corners = [
+        (0.0, 0.0),
+        (width as f64, 0.0),
+        (width as f64, height as f64),
+        (0.0, height as f64),
+    ];
+
+    let mut ring = Vec::with_capacity(5);
+    for (px, py) in corners {
+        let (wx, wy) = geo_transform.pixel_to_world(px, py);
+        let lonlat = transformer
+            .transform_coordinate(&Coordinate::new_2d(wx, wy))
+            .ok()?;
+        ring.push([lonlat.x, lonlat.y]);
+    }
+    ring.push(ring[0]);
+    Some(ring)
 }
 
 /// Fetch, reproject, and resample a dataset's pixels onto a `TILE_SIZE` x
@@ -486,5 +526,43 @@ mod tests {
             .transform_coordinate(&origin)
             .expect("transform must succeed for a real UTM zone");
         assert!(result.x.is_finite() && result.y.is_finite());
+    }
+
+    #[test]
+    fn compute_wgs84_footprint_returns_closed_ring_near_utm_zone() {
+        // 100x100px, 10m resolution, origin near UTM zone 33N's central
+        // meridian (easting 500000) at ~45N (northing 5,000,000).
+        let gt = oxigdal::core_types::types::GeoTransform {
+            origin_x: 500_000.0,
+            pixel_width: 10.0,
+            row_rotation: 0.0,
+            origin_y: 5_000_000.0,
+            col_rotation: 0.0,
+            pixel_height: -10.0,
+        };
+
+        let ring = compute_wgs84_footprint(&gt, 100, 100, 32633)
+            .expect("footprint must reproject for a real UTM zone");
+
+        assert_eq!(ring.len(), 5, "ring must close (first corner repeated last)");
+        assert_eq!(ring[0], ring[4], "ring must be closed");
+        for [lon, lat] in &ring {
+            assert!(lon.is_finite() && lat.is_finite());
+            assert!((13.0..17.0).contains(lon), "lon {lon} not near zone 33 central meridian");
+            assert!((44.0..46.0).contains(lat), "lat {lat} not near expected northing");
+        }
+    }
+
+    #[test]
+    fn compute_wgs84_footprint_none_for_unresolvable_epsg() {
+        let gt = oxigdal::core_types::types::GeoTransform {
+            origin_x: 0.0,
+            pixel_width: 1.0,
+            row_rotation: 0.0,
+            origin_y: 0.0,
+            col_rotation: 0.0,
+            pixel_height: -1.0,
+        };
+        assert!(compute_wgs84_footprint(&gt, 10, 10, 0).is_none());
     }
 }

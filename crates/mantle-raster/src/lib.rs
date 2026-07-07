@@ -35,6 +35,11 @@ pub struct CogDebugInfo {
     pub tile_size: Option<(u32, u32)>,
     pub epsg_code: Option<u32>,
     pub geo_transform: Option<GeoTransform>,
+    /// The dataset's pixel extent reprojected to EPSG:4326, as a closed
+    /// ring of `[lon, lat]` corners (NW, NE, SE, SW, NW) — lets clients
+    /// draw the real footprint / zoom to it without doing CRS math
+    /// themselves. `None` if CRS/geotransform detection failed.
+    pub footprint_wgs84: Option<Vec<[f64; 2]>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
