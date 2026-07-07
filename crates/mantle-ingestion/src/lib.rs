@@ -27,12 +27,16 @@ pub struct UploadRequest {
     pub content_type: String,
     #[serde(default)]
     pub filename: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudReferenceRequest {
     pub name: String,
     pub storage_uri: String,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +101,7 @@ impl IngestionService for StubIngestionService {
         let dataset = mantle_catalog::DatasetRecord {
             id,
             name: request.name,
+            description: request.description,
             format: mantle_arrow::DatasetFormat::Cog,
             storage_uri,
             crs: Some("EPSG:4326".into()),
@@ -128,6 +133,7 @@ impl IngestionService for StubIngestionService {
         let dataset = mantle_catalog::DatasetRecord {
             id,
             name: request.name,
+            description: request.description,
             format,
             storage_uri: request.storage_uri,
             crs: Some("EPSG:4326".into()),

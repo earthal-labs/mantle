@@ -24,6 +24,7 @@ pub async fn upload_dataset(
     mut multipart: Multipart,
 ) -> Result<Json<IngestionResponse>, ApiError> {
     let mut name = None::<String>;
+    let mut description = None::<String>;
     let mut content_type = "application/octet-stream".to_string();
 
     while let Some(field) = multipart
@@ -40,6 +41,14 @@ pub async fn upload_dataset(
                     name = Some(value);
                 }
             }
+            Some("description") => {
+                let value = field.text().await.map_err(|e| {
+                    ApiError::new(StatusCode::BAD_REQUEST, format!("read description field: {e}"))
+                })?;
+                if !value.trim().is_empty() {
+                    description = Some(value);
+                }
+            }
             Some("file") => {
                 let filename = field.file_name().map(str::to_string).ok_or_else(|| {
                     ApiError::new(StatusCode::BAD_REQUEST, "multipart field 'file' is required")
@@ -54,6 +63,7 @@ pub async fn upload_dataset(
                     name,
                     content_type,
                     filename: Some(filename.clone()),
+                    description,
                 };
 
                 let store = build_object_store(&state.config.storage).map_err(ApiError::from)?;

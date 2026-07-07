@@ -115,6 +115,7 @@ pub(crate) async fn register_cloud_reference(
     let dataset = mantle_catalog::DatasetRecord {
         id,
         name: request.name,
+        description: request.description,
         format,
         storage_uri,
         crs: spatial.crs.clone(),

@@ -28,13 +28,14 @@ where
 {
     sqlx::query(
         r#"
-        INSERT INTO datasets (id, name, format, storage_uri, crs, temporal_start, temporal_end, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        INSERT INTO datasets (id, name, description, format, storage_uri, crs, temporal_start, temporal_end, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT (id) DO NOTHING
         "#,
     )
     .bind(dataset.id)
     .bind(&dataset.name)
+    .bind(&dataset.description)
     .bind(format_to_db(dataset.format))
     .bind(&dataset.storage_uri)
     .bind(&dataset.crs)
@@ -76,7 +77,7 @@ pub(crate) async fn fetch_dataset(
 ) -> Result<DatasetRecord, CatalogError> {
     let row = sqlx::query_as::<_, DatasetRow>(
         r#"
-        SELECT id, name, format, storage_uri, crs, temporal_start, temporal_end, created_at
+        SELECT id, name, description, format, storage_uri, crs, temporal_start, temporal_end, created_at
         FROM datasets
         WHERE id = $1
           AND NOT EXISTS (
@@ -101,7 +102,7 @@ pub(crate) async fn fetch_dataset_any(
 ) -> Result<DatasetRecord, CatalogError> {
     let row = sqlx::query_as::<_, DatasetRow>(
         r#"
-        SELECT id, name, format, storage_uri, crs, temporal_start, temporal_end, created_at
+        SELECT id, name, description, format, storage_uri, crs, temporal_start, temporal_end, created_at
         FROM datasets
         WHERE id = $1
         "#,
@@ -118,6 +119,7 @@ pub(crate) async fn fetch_dataset_any(
 struct DatasetRow {
     id: Uuid,
     name: String,
+    description: Option<String>,
     format: String,
     storage_uri: String,
     crs: Option<String>,
@@ -131,6 +133,7 @@ impl From<DatasetRow> for DatasetRecord {
         Self {
             id: row.id,
             name: row.name,
+            description: row.description,
             format: format_from_db(&row.format),
             storage_uri: row.storage_uri,
             crs: row.crs,

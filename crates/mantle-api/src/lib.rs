@@ -2,6 +2,7 @@
 
 mod admin;
 mod auth;
+mod datasets;
 mod error;
 mod jobs;
 mod vrpm_client;
@@ -13,6 +14,7 @@ use admin::{
     upload_dataset,
 };
 use auth::{load_admin_token, require_admin_auth};
+use datasets::get_dataset_resource;
 use jobs::get_job_status;
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
@@ -220,6 +222,7 @@ pub async fn build_router(config: Arc<MantleConfig>) -> anyhow::Result<Router> {
         .route("/health", get(health))
         .route("/console", get(console))
         .route("/status/{job_id}", get(get_job_status))
+        .route("/datasets/{id}", get(get_dataset_resource))
         .route("/tiles/{z}/{x}/{y}", get(get_tile))
         // Register landing on the parent — nest("/stac")+route("/") does not
         // reliably match both `/stac` and `/stac/` in Axum 0.8.

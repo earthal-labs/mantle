@@ -47,6 +47,8 @@ use uuid::Uuid;
 pub struct DatasetRecord {
     pub id: Uuid,
     pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
     pub format: DatasetFormat,
     pub storage_uri: String,
     pub crs: Option<String>,
@@ -315,6 +317,7 @@ mod tests {
         let record = DatasetRecord {
             id: Uuid::nil(),
             name: "test".into(),
+            description: None,
             format: DatasetFormat::Cog,
             storage_uri: "s3://bucket/key".into(),
             crs: Some("EPSG:4326".into()),
@@ -346,6 +349,7 @@ mod tests {
         let dataset = DatasetRecord {
             id,
             name: "integration-test".into(),
+            description: Some("integration test dataset".into()),
             format: DatasetFormat::Cog,
             storage_uri: "s3://mantle-data/test.tif".into(),
             crs: Some("EPSG:4326".into()),

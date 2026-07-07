@@ -82,34 +82,22 @@
 
   <section id="panel-datasets">
     <fieldset>
-      <legend>POST /admin/datasets/upload</legend>
-      <div class="row">
-        <label>name<input id="up-name" placeholder="optional" /></label>
-        <label>file<input id="up-file" type="file" /></label>
-        <button class="action" onclick="uploadDataset()">Upload</button>
-      </div>
-      <pre id="upload-output"></pre>
-    </fieldset>
-
-    <fieldset>
-      <legend>POST /admin/datasets/reference</legend>
-      <div class="row">
-        <label>name<input id="ref-name" /></label>
-        <label>storage_uri<input id="ref-uri" placeholder="s3://bucket/key.tif" style="width:320px" /></label>
-        <button class="action" onclick="referenceDataset()">Register</button>
-      </div>
-      <pre id="reference-output"></pre>
-    </fieldset>
-
-    <fieldset>
-      <legend>Manage a dataset</legend>
+      <legend>GET /datasets/{id} — dataset resource</legend>
       <div class="row">
         <label>dataset_id<input id="mgmt-id" style="width:300px" /></label>
+        <button class="action" onclick="loadDatasetResource()">Load</button>
       </div>
+      <div id="dataset-resource-card"></div>
+      <pre id="dataset-resource-output"></pre>
+    </fieldset>
+
+    <fieldset>
+      <legend>Operations</legend>
       <div class="row">
-        <button class="action" onclick="datasetDebug()">Debug metadata</button>
-        <button class="action danger" onclick="datasetDelete()">Soft-delete</button>
-        <button class="action danger" onclick="datasetPurge()">Purge now</button>
+        <button class="action" onclick="viewInTiles()">View in Tiles</button>
+        <button class="action" onclick="datasetDebug()">Debug metadata (admin)</button>
+        <button class="action danger" onclick="datasetDelete()">Soft-delete (admin)</button>
+        <button class="action danger" onclick="datasetPurge()">Purge now (admin)</button>
       </div>
       <div class="hint">Soft-delete then Purge = immediate hard delete, bypassing the retention window.</div>
 
@@ -122,8 +110,30 @@
           <textarea id="attach-params">{"red_band": 1, "nir_band": 2}</textarea>
         </label>
       </div>
-      <button class="action" onclick="attachFunction()">Attach vRPM/pRPM</button>
+      <button class="action" onclick="attachFunction()">Attach vRPM/pRPM (admin)</button>
       <pre id="mgmt-output"></pre>
+    </fieldset>
+
+    <fieldset>
+      <legend>POST /admin/datasets/upload</legend>
+      <div class="row">
+        <label>name<input id="up-name" placeholder="optional" /></label>
+        <label>description<input id="up-description" placeholder="optional" style="width:220px" /></label>
+        <label>file<input id="up-file" type="file" /></label>
+        <button class="action" onclick="uploadDataset()">Upload</button>
+      </div>
+      <pre id="upload-output"></pre>
+    </fieldset>
+
+    <fieldset>
+      <legend>POST /admin/datasets/reference</legend>
+      <div class="row">
+        <label>name<input id="ref-name" /></label>
+        <label>description<input id="ref-description" placeholder="optional" style="width:220px" /></label>
+        <label>storage_uri<input id="ref-uri" placeholder="s3://bucket/key.tif" style="width:320px" /></label>
+        <button class="action" onclick="referenceDataset()">Register</button>
+      </div>
+      <pre id="reference-output"></pre>
     </fieldset>
   </section>
 
@@ -265,6 +275,7 @@
     document.getElementById('mgmt-id').value = id;
     document.getElementById('tile-dataset-id').value = id;
     document.getElementById('tile-mode').value = 'dataset';
+    loadDatasetResource();
   }
 
   // ---- datasets (admin) ----
@@ -276,7 +287,9 @@
     }
     const form = new FormData();
     const name = document.getElementById('up-name').value.trim();
+    const description = document.getElementById('up-description').value.trim();
     if (name) form.append('name', name);
+    if (description) form.append('description', description);
     form.append('file', fileInput.files[0]);
     const res = await fetch('/admin/datasets/upload', {
       method: 'POST',
@@ -290,11 +303,12 @@
 
   async function referenceDataset() {
     const name = document.getElementById('ref-name').value.trim();
+    const description = document.getElementById('ref-description').value.trim();
     const storage_uri = document.getElementById('ref-uri').value.trim();
     const res = await fetch('/admin/datasets/reference', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ name, storage_uri }),
+      body: JSON.stringify({ name, description: description || undefined, storage_uri }),
     });
     const data = await asJson(res);
     show('reference-output', data);
@@ -303,6 +317,57 @@
 
   function mgmtId() {
     return document.getElementById('mgmt-id').value.trim();
+  }
+
+  // ---- dataset resource (GET /datasets/{id}) ----
+  async function loadDatasetResource() {
+    const id = mgmtId();
+    const card = document.getElementById('dataset-resource-card');
+    if (!id) {
+      card.innerHTML = '';
+      show('dataset-resource-output', 'enter a dataset_id first');
+      return;
+    }
+    const res = await fetch(`/datasets/${id}`);
+    const data = await asJson(res);
+    show('dataset-resource-output', data);
+    renderDatasetCard(data);
+  }
+
+  function renderDatasetCard(data) {
+    const card = document.getElementById('dataset-resource-card');
+    if (!data || data.error) {
+      card.innerHTML = '';
+      return;
+    }
+    const extent = data.extent;
+    const extentRow = extent
+      ? `<tr><td>extent</td><td>${extent.width}&times;${extent.height}px, ${extent.band_count} band(s), ${extent.data_type || 'unknown type'}, EPSG:${extent.epsg_code ?? '?'}</td></tr>`
+      : `<tr><td>extent</td><td><em>not available &mdash; CRS/geotransform not detected</em></td></tr>`;
+    const linkRows = (data.links || [])
+      .map((l) => `<tr><td>${l.rel}</td><td>${l.method} ${l.href}${l.auth ? ' <em>(' + l.auth + ')</em>' : ''}</td></tr>`)
+      .join('');
+    card.innerHTML = `
+      <table>
+        <tr><td>name</td><td>${data.name || ''}</td></tr>
+        <tr><td>description</td><td>${data.description || '<em>none</em>'}</td></tr>
+        <tr><td>format</td><td>${data.format || ''}</td></tr>
+        <tr><td>crs</td><td>${data.crs || '<em>unknown</em>'}</td></tr>
+        <tr><td>storage_uri</td><td>${data.storage_uri || ''}</td></tr>
+        ${extentRow}
+      </table>
+      <div class="hint">operations</div>
+      <table>${linkRows}</table>
+    `;
+  }
+
+  function viewInTiles() {
+    const id = mgmtId();
+    if (!id) return;
+    document.getElementById('tile-dataset-id').value = id;
+    document.getElementById('tile-mode').value = 'dataset';
+    document.querySelector('#tabs button[data-tab="tiles"]').click();
+    loadOverlay();
   }
 
   async function datasetDebug() {

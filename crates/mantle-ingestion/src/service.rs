@@ -77,6 +77,7 @@ impl MantleIngestionService {
             self.catalog.as_ref(),
             dataset_id,
             request.name,
+            request.description,
             DatasetFormat::Cog,
             storage_uri,
             spatial,
@@ -85,10 +86,12 @@ impl MantleIngestionService {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn insert_catalog_record(
     catalog: &dyn CatalogClient,
     id: Uuid,
     name: String,
+    description: Option<String>,
     format: DatasetFormat,
     storage_uri: String,
     spatial: crate::metadata::SpatialMetadata,
@@ -97,6 +100,7 @@ pub(crate) async fn insert_catalog_record(
     let dataset = DatasetRecord {
         id,
         name,
+        description,
         format,
         storage_uri,
         crs: spatial.crs,
