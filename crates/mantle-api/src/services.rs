@@ -12,7 +12,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use mantle_catalog::{CatalogError, VirtualServiceKind};
+use mantle_catalog::{CatalogError, SpatialQuery, VirtualServiceKind};
 use mantle_ogc::validate_params_against_specs;
 use mantle_raster::{
     apply_colormap, colormap_from_lut_id, encode_tile, normalize_band, parse_colormap,
@@ -104,6 +104,47 @@ pub async fn attach_function(
         function_id: record.function_id,
         parent_service_id: record.service_id,
     }))
+}
+
+/// `GET /services` — unified catalog list: base services (from the spatial
+/// index) plus every attached/output virtual service, each tagged with
+/// `kind` so the console can render one flat card grid.
+pub async fn list_services(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let base_services = state
+        .catalog
+        .spatial_query(SpatialQuery::default())
+        .await
+        .map_err(catalog_err)?;
+    let virtual_services = state
+        .catalog
+        .list_virtual_services(None)
+        .await
+        .map_err(catalog_err)?;
+
+    let mut items: Vec<Value> = base_services
+        .iter()
+        .map(|service| {
+            json!({
+                "id": service.id,
+                "name": service.name,
+                "format": service.format,
+                "storage_uri": service.storage_uri,
+                "crs": service.crs,
+                "kind": "service",
+            })
+        })
+        .collect();
+    items.extend(virtual_services.iter().map(|service| {
+        json!({
+            "id": service.id,
+            "name": service.slug,
+            "slug": service.slug,
+            "function_id": service.function_id,
+            "kind": service.service_kind,
+        })
+    }));
+
+    Ok(Json(json!({ "services": items })))
 }
 
 /// `GET /services/{id}` — unified item lookup. Tries `id` as a base service

@@ -225,6 +225,7 @@ pub async fn build_router(config: Arc<MantleConfig>) -> anyhow::Result<Router> {
         // reliably match both `/stac` and `/stac/` in Axum 0.8.
         .route("/stac", get(stac_landing))
         .route("/stac/", get(stac_landing))
+        .route("/services", get(services::list_services))
         .nest("/services", service_routes)
         .nest("/plugins", plugin_routes)
         .nest("/stac", stac_routes)
@@ -254,7 +255,7 @@ mod console_tests {
     async fn console_serves_embedded_html() {
         let response = console().await;
         assert!(response.0.contains("Mantle Console"));
-        assert!(response.0.contains("id=\"map\""));
+        assert!(response.0.contains("id=\"item-map\""));
     }
 }
 

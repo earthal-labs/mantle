@@ -8,26 +8,30 @@
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; background: #14161a; color: #e6e6e6; }
+  a { color: #6cf; }
   #topbar {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 10px 14px; background: #1e2126; border-bottom: 1px solid #2c3038;
   }
-  #topbar h1 { font-size: 15px; margin: 0 12px 0 0; color: #9cf; white-space: nowrap; }
+  #topbar h1 { font-size: 15px; margin: 0 12px 0 0; color: #9cf; white-space: nowrap; cursor: pointer; }
   #topbar input { font-family: monospace; font-size: 12px; padding: 5px 7px; background: #0f1114; color: #e6e6e6; border: 1px solid #383d47; border-radius: 3px; }
-  #admin-token { width: 220px; }
+  #admin-token { width: 200px; }
   nav { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
-  nav button { padding: 6px 12px; cursor: pointer; background: #262a31; color: #ccc; border: 1px solid #383d47; border-radius: 3px; font-size: 12px; }
-  nav button.active { background: #2f5f8f; color: #fff; border-color: #3f7fb0; }
-  main { padding: 14px; max-width: 1100px; }
-  section { display: none; }
-  section.active { display: block; }
+  nav a { padding: 6px 12px; cursor: pointer; background: #262a31; color: #ccc; border: 1px solid #383d47; border-radius: 3px; font-size: 12px; text-decoration: none; }
+  nav a.active { background: #2f5f8f; color: #fff; border-color: #3f7fb0; }
+  main { padding: 18px; max-width: 1200px; margin: 0 auto; }
+  .view { display: none; }
+  .view.active { display: block; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
   .row label { font-size: 12px; opacity: 0.85; display: flex; flex-direction: column; gap: 3px; }
   input, textarea, select { font-family: monospace; font-size: 12px; padding: 6px 8px; background: #0f1114; color: #e6e6e6; border: 1px solid #383d47; border-radius: 3px; }
   textarea { width: 100%; min-height: 60px; }
-  button.action { padding: 6px 12px; cursor: pointer; background: #2f5f8f; color: #fff; border: none; border-radius: 3px; }
+  button { font-family: inherit; }
+  button.action { padding: 6px 12px; cursor: pointer; background: #2f5f8f; color: #fff; border: none; border-radius: 3px; font-size: 12px; }
   button.action:hover { background: #3a72a8; }
-  button.danger { background: #8f3f3f; }
+  button.secondary { background: #262a31; color: #ccc; border: 1px solid #383d47; }
+  button.secondary:hover { background: #2f333b; }
+  button.danger { background: #8f3f3f; color: #fff; border: none; }
   button.danger:hover { background: #a84c4c; }
   pre { background: #0f1114; border: 1px solid #2c3038; border-radius: 3px; padding: 10px; max-height: 320px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
   table { border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 10px; }
@@ -35,38 +39,194 @@
   th { color: #9cf; }
   fieldset { border: 1px solid #2c3038; border-radius: 4px; margin-bottom: 14px; padding: 10px 12px; }
   legend { font-size: 12px; color: #9cf; padding: 0 6px; }
-  #map { height: 70vh; border: 1px solid #2c3038; border-radius: 3px; }
+  #map { height: 65vh; border: 1px solid #2c3038; border-radius: 3px; }
   .hint { font-size: 11px; opacity: 0.6; margin: 4px 0 10px; }
+  h2 { font-size: 18px; margin: 0 0 14px; }
+  h3 { font-size: 14px; color: #9cf; margin: 0 0 8px; }
+
+  /* Home */
+  .hero { padding: 40px 10px; text-align: center; }
+  .hero h2 { font-size: 26px; }
+  .hero p { opacity: 0.75; max-width: 560px; margin: 8px auto 24px; }
+  .hero .actions { display: flex; gap: 10px; justify-content: center; }
+
+  /* Content */
+  .content-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+  .content-toolbar input { flex: 1; max-width: 320px; }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  .card {
+    background: #1b1e23; border: 1px solid #2c3038; border-radius: 6px; padding: 12px;
+    cursor: pointer; display: flex; flex-direction: column; gap: 6px;
+  }
+  .card:hover { border-color: #3f7fb0; }
+  .card .name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .meta { font-size: 11px; opacity: 0.65; }
+  .badge { display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 10px; background: #2f5f8f; color: #fff; width: fit-content; }
+  .badge.output { background: #4f7f3f; }
+  .badge.attached { background: #7f5f2f; }
+  .empty-state { opacity: 0.6; padding: 30px; text-align: center; }
+
+  /* Item */
+  .item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .item-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .breadcrumb { font-size: 12px; opacity: 0.6; margin-bottom: 8px; }
+  .breadcrumb a { color: #9cf; }
+
+  /* Modal */
+  .modal-backdrop {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    align-items: center; justify-content: center; z-index: 50;
+  }
+  .modal-backdrop.active { display: flex; }
+  .modal { background: #1b1e23; border: 1px solid #383d47; border-radius: 6px; padding: 18px; width: 420px; max-width: 92vw; }
+  .modal h3 { margin-top: 0; }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+  /* Analysis */
+  .plugin-list { display: flex; flex-direction: column; gap: 6px; max-width: 260px; }
+  .plugin-list button { text-align: left; padding: 8px 10px; }
+  .analysis-layout { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+  .analysis-form { flex: 1; min-width: 320px; }
+  .form-field { margin-bottom: 10px; }
+  .form-field label { display: block; font-size: 12px; opacity: 0.85; margin-bottom: 3px; }
+  .form-field input[type="text"], .form-field input[type="number"], .form-field select { width: 100%; }
+  .form-field .field-hint { font-size: 10px; opacity: 0.55; margin-top: 2px; }
 </style>
 </head>
 <body>
 
 <div id="topbar">
-  <h1>Mantle Console</h1>
+  <h1 onclick="location.hash='#/'">Mantle Console</h1>
   <label style="font-size:12px;">admin token
     <input id="admin-token" placeholder="MANTLE_ADMIN_TOKEN" />
   </label>
   <nav id="tabs">
-    <button data-tab="health" class="active">Health</button>
-    <button data-tab="stac">STAC</button>
-    <button data-tab="datasets">Datasets</button>
-    <button data-tab="tiles">Tiles</button>
-    <button data-tab="plugins">Plugins</button>
-    <button data-tab="jobs">Jobs</button>
+    <a href="#/" data-route="home">Home</a>
+    <a href="#/content" data-route="content">Content</a>
+    <a href="#/analysis" data-route="analysis">Analysis</a>
+    <a href="#/dev" data-route="dev">Dev</a>
   </nav>
 </div>
 
 <main>
 
-  <section id="panel-health" class="active">
+  <!-- ================= Home ================= -->
+  <section id="view-home" class="view">
+    <div class="hero">
+      <h2>Mantle</h2>
+      <p>Cloud-native raster catalog. Publish COG and Icechunk services, attach on-the-fly vRPM/pRPM analysis, and browse everything as one flat REST directory — just like ArcGIS Online.</p>
+      <div class="actions">
+        <button class="action" onclick="location.hash='#/content'">Browse Content</button>
+        <button class="action secondary" onclick="location.hash='#/content'; setTimeout(openUploadModal, 0)">Upload a service</button>
+        <button class="action secondary" onclick="location.hash='#/analysis'">Run Analysis</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= Content ================= -->
+  <section id="view-content" class="view">
+    <div class="item-header">
+      <h2>Content</h2>
+      <button class="action" onclick="openUploadModal()">Upload</button>
+    </div>
+    <div class="content-toolbar">
+      <input id="content-filter" placeholder="Filter by name or id…" oninput="renderContentGrid()" />
+      <button class="action secondary" onclick="loadContent()">Refresh</button>
+      <span id="content-status" class="hint"></span>
+    </div>
+    <div id="content-grid" class="card-grid"></div>
+  </section>
+
+  <!-- ================= Item ================= -->
+  <section id="view-item" class="view">
+    <div class="breadcrumb"><a href="#/content">Content</a> / <span id="item-breadcrumb-name"></span></div>
+    <div class="item-header">
+      <h2 id="item-title">…</h2>
+      <div class="item-actions">
+        <button class="action" onclick="itemViewInMap()">View in Map</button>
+        <button class="action secondary" onclick="itemShowTab('details')">Service Details</button>
+        <button class="action secondary" onclick="itemShowTab('debug')">Debug</button>
+        <button class="action danger" onclick="openDeleteModal()">Delete</button>
+      </div>
+    </div>
+
+    <div id="item-tab-details" class="item-tab">
+      <div id="item-resource-card"></div>
+      <fieldset id="item-attached-fieldset" style="display:none;">
+        <legend>Attached services</legend>
+        <div id="item-attached-list"></div>
+      </fieldset>
+      <fieldset>
+        <legend>Raw resource JSON</legend>
+        <pre id="item-resource-json"></pre>
+      </fieldset>
+    </div>
+
+    <div id="item-tab-map" class="item-tab" style="display:none;">
+      <div class="row">
+        <label>format<input id="item-tile-format" value="webp" style="width:60px" /></label>
+        <button class="action secondary" onclick="itemLoadOverlay()">Reload tiles</button>
+        <button class="action secondary" onclick="itemZoomTo()">Zoom to service</button>
+        <span id="item-tile-status" class="hint"></span>
+      </div>
+      <div id="item-map"></div>
+    </div>
+
+    <div id="item-tab-debug" class="item-tab" style="display:none;">
+      <fieldset>
+        <legend>GET /admin/services/{id}/debug</legend>
+        <div class="hint">Requires admin token. Reports what oxigdal actually detected: CRS, geotransform, dimensions, tiling.</div>
+        <button class="action" onclick="itemLoadDebug()">Load debug info</button>
+        <pre id="item-debug-output"></pre>
+      </fieldset>
+    </div>
+  </section>
+
+  <!-- ================= Analysis ================= -->
+  <section id="view-analysis" class="view">
+    <h2>Analysis</h2>
+    <div class="analysis-layout">
+      <fieldset style="min-width:260px;">
+        <legend>Plugins</legend>
+        <div id="plugin-list" class="plugin-list"><span class="hint">loading…</span></div>
+      </fieldset>
+
+      <div id="analysis-form-wrap" class="analysis-form" style="display:none;">
+        <fieldset>
+          <legend id="analysis-form-title">Plugin</legend>
+          <p id="analysis-form-description" class="hint"></p>
+
+          <div id="analysis-attach-fields" style="display:none;">
+            <div class="form-field">
+              <label>Attach to service (base service UUID)</label>
+              <select id="analysis-parent-service"></select>
+            </div>
+            <div class="form-field">
+              <label>Endpoint slug (optional)</label>
+              <input type="text" id="analysis-endpoint-slug" placeholder="auto-generated if blank" />
+            </div>
+          </div>
+
+          <div id="analysis-dynamic-form"></div>
+
+          <button class="action" id="analysis-submit-btn" onclick="analysisSubmit()">Run</button>
+          <pre id="analysis-output"></pre>
+          <div id="analysis-poll-status" class="hint"></div>
+        </fieldset>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= Dev ================= -->
+  <section id="view-dev" class="view">
+    <h2>Dev tools</h2>
+
     <fieldset>
       <legend>GET /health</legend>
       <button class="action" onclick="checkHealth()">Check</button>
       <pre id="health-output"></pre>
     </fieldset>
-  </section>
 
-  <section id="panel-stac">
     <fieldset>
       <legend>GET /stac/search</legend>
       <div class="row">
@@ -78,96 +238,32 @@
       <div id="stac-table"></div>
       <pre id="stac-output"></pre>
     </fieldset>
-  </section>
-
-  <section id="panel-datasets">
-    <fieldset>
-      <legend>GET /datasets/{id} — dataset resource</legend>
-      <div class="row">
-        <label>dataset_id<input id="mgmt-id" style="width:300px" /></label>
-        <button class="action" onclick="loadDatasetResource()">Load</button>
-      </div>
-      <div id="dataset-resource-card"></div>
-      <pre id="dataset-resource-output"></pre>
-    </fieldset>
 
     <fieldset>
-      <legend>Operations</legend>
-      <div class="row">
-        <button class="action" onclick="viewInTiles()">View in Tiles</button>
-        <button class="action" onclick="datasetDebug()">Debug metadata (admin)</button>
-        <button class="action danger" onclick="datasetDelete()">Soft-delete (admin)</button>
-        <button class="action danger" onclick="datasetPurge()">Purge now (admin)</button>
-      </div>
-      <div class="hint">Soft-delete then Purge = immediate hard delete, bypassing the retention window.</div>
-
-      <div class="row">
-        <label>function_id<input id="attach-fn" value="ndvi" style="width:120px" /></label>
-        <label>endpoint_slug<input id="attach-slug" placeholder="optional" style="width:140px" /></label>
-      </div>
-      <div class="row">
-        <label style="flex:1;">params_defaults (JSON)
-          <textarea id="attach-params">{"red_band": 1, "nir_band": 2}</textarea>
-        </label>
-      </div>
-      <button class="action" onclick="attachFunction()">Attach vRPM/pRPM (admin)</button>
-      <pre id="mgmt-output"></pre>
-    </fieldset>
-
-    <fieldset>
-      <legend>POST /admin/datasets/upload</legend>
-      <div class="row">
-        <label>name<input id="up-name" placeholder="optional" /></label>
-        <label>description<input id="up-description" placeholder="optional" style="width:220px" /></label>
-        <label>file<input id="up-file" type="file" /></label>
-        <button class="action" onclick="uploadDataset()">Upload</button>
-      </div>
-      <pre id="upload-output"></pre>
-    </fieldset>
-
-    <fieldset>
-      <legend>POST /admin/datasets/reference</legend>
-      <div class="row">
-        <label>name<input id="ref-name" /></label>
-        <label>description<input id="ref-description" placeholder="optional" style="width:220px" /></label>
-        <label>storage_uri<input id="ref-uri" placeholder="s3://bucket/key.tif" style="width:320px" /></label>
-        <button class="action" onclick="referenceDataset()">Register</button>
-      </div>
-      <pre id="reference-output"></pre>
-    </fieldset>
-  </section>
-
-  <section id="panel-tiles">
-    <fieldset>
-      <legend>Tile viewer</legend>
+      <legend>Raw tile viewer</legend>
       <div class="row">
         <label>mode
           <select id="tile-mode">
-            <option value="dataset">raw dataset</option>
-            <option value="service">vRPM service</option>
+            <option value="service">base service (?service_id)</option>
+            <option value="virtual">virtual service (/services/{slug}/tiles)</option>
           </select>
         </label>
-        <label>dataset_id<input id="tile-dataset-id" style="width:280px" /></label>
-        <label>service slug<input id="tile-slug" style="width:140px" /></label>
+        <label>service_id<input id="tile-service-id" style="width:280px" /></label>
+        <label>slug<input id="tile-slug" style="width:140px" /></label>
         <label>format<input id="tile-format" value="webp" style="width:60px" /></label>
-        <button class="action" onclick="loadOverlay()">Load overlay</button>
-        <button class="action" onclick="zoomToDataset()">Zoom to dataset</button>
-        <span id="tile-status" class="hint"></span>
+        <button class="action" onclick="devLoadOverlay()">Load overlay</button>
+        <span id="dev-tile-status" class="hint"></span>
       </div>
-      <div id="map"></div>
+      <div id="dev-map" style="height:50vh; border:1px solid #2c3038; border-radius:3px;"></div>
     </fieldset>
-  </section>
 
-  <section id="panel-plugins">
     <fieldset>
       <legend>GET /plugins</legend>
-      <button class="action" onclick="listPlugins()">List</button>
+      <button class="action" onclick="listPluginsRaw()">List</button>
       <div id="plugins-table"></div>
       <pre id="plugins-output"></pre>
     </fieldset>
-  </section>
 
-  <section id="panel-jobs">
     <fieldset>
       <legend>POST /ogc/processes/{process_id}/execution</legend>
       <div class="row">
@@ -176,7 +272,7 @@
           <textarea id="job-inputs">{"values": [1, 2, 3, 4, 5]}</textarea>
         </label>
       </div>
-      <button class="action" onclick="submitJob()">Submit</button>
+      <button class="action" onclick="submitJobRaw()">Submit</button>
       <pre id="submit-output"></pre>
     </fieldset>
 
@@ -184,7 +280,7 @@
       <legend>GET /status/{job_id}</legend>
       <div class="row">
         <label>job_id<input id="job-id" style="width:300px" /></label>
-        <button class="action" onclick="pollJob()">Poll</button>
+        <button class="action" onclick="pollJobRaw()">Poll</button>
       </div>
       <pre id="poll-output"></pre>
     </fieldset>
@@ -192,22 +288,47 @@
 
 </main>
 
+<!-- ================= Upload modal ================= -->
+<div id="upload-modal" class="modal-backdrop">
+  <div class="modal">
+    <h3>Upload a service</h3>
+    <div class="row" style="flex-direction:column; align-items:stretch;">
+      <label>name<input id="up-name" placeholder="optional" /></label>
+      <label>description<input id="up-description" placeholder="optional" /></label>
+      <label>file<input id="up-file" type="file" /></label>
+    </div>
+    <div class="hint">Or register an external S3/HTTPS URI instead of uploading bytes:</div>
+    <div class="row" style="flex-direction:column; align-items:stretch;">
+      <label>storage_uri<input id="ref-uri" placeholder="s3://bucket/key.tif" /></label>
+    </div>
+    <pre id="upload-output"></pre>
+    <div class="actions">
+      <button class="action secondary" onclick="closeModal('upload-modal')">Close</button>
+      <button class="action" onclick="referenceService()">Register reference</button>
+      <button class="action" onclick="uploadService()">Upload file</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= Delete modal ================= -->
+<div id="delete-modal" class="modal-backdrop">
+  <div class="modal">
+    <h3>Delete service</h3>
+    <p class="hint">Soft delete hides it from every read path immediately; the row is purged later (or immediately below). Purge requires soft-delete first.</p>
+    <pre id="delete-output"></pre>
+    <div class="actions">
+      <button class="action secondary" onclick="closeModal('delete-modal')">Cancel</button>
+      <button class="action danger" onclick="deleteSoft()">Soft Delete</button>
+      <button class="action danger" onclick="deletePurge()">Delete Permanently</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  // ---- tabs ----
-  document.getElementById('tabs').addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-tab]');
-    if (!btn) return;
-    document.querySelectorAll('#tabs button').forEach((b) => b.classList.remove('active'));
-    document.querySelectorAll('main section').forEach((s) => s.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
-    if (btn.dataset.tab === 'tiles' && map) {
-      setTimeout(() => map.invalidateSize(), 50);
-    }
-  });
-
-  // ---- shared helpers ----
+  // ============================================================
+  // Shared helpers
+  // ============================================================
   const tokenInput = document.getElementById('admin-token');
   tokenInput.value = localStorage.getItem('mantle_admin_token') || '';
   tokenInput.addEventListener('input', () => {
@@ -222,8 +343,9 @@
   }
 
   function show(id, data) {
-    document.getElementById(id).textContent =
-      typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
   }
 
   async function asJson(res) {
@@ -231,13 +353,578 @@
     try { return JSON.parse(text); } catch { return text; }
   }
 
-  // ---- health ----
+  function openModal(id) { document.getElementById(id).classList.add('active'); }
+  function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+  // ============================================================
+  // Hash router
+  // ============================================================
+  const routes = ['home', 'content', 'item', 'analysis', 'dev'];
+
+  function parseHash() {
+    const raw = (location.hash || '#/').slice(1); // drop '#'
+    const parts = raw.split('/').filter(Boolean);
+    if (parts.length === 0) return { route: 'home' };
+    if (parts[0] === 'content') return { route: 'content' };
+    if (parts[0] === 'item' && parts[1]) return { route: 'item', id: decodeURIComponent(parts[1]) };
+    if (parts[0] === 'analysis') return { route: 'analysis' };
+    if (parts[0] === 'dev') return { route: 'dev' };
+    return { route: 'home' };
+  }
+
+  function renderRoute() {
+    const { route, id } = parseHash();
+    routes.forEach((r) => {
+      document.getElementById('view-' + r).classList.toggle('active', r === route);
+    });
+    document.querySelectorAll('#tabs a').forEach((a) => {
+      a.classList.toggle('active', a.dataset.route === route);
+    });
+    if (route === 'content') loadContent();
+    if (route === 'item') loadItem(id);
+    if (route === 'analysis') loadAnalysis();
+    if (route === 'dev' && devMap) setTimeout(() => devMap.invalidateSize(), 50);
+  }
+
+  window.addEventListener('hashchange', renderRoute);
+
+  // ============================================================
+  // Content (GET /services)
+  // ============================================================
+  let contentItems = [];
+
+  async function loadContent() {
+    const statusEl = document.getElementById('content-status');
+    statusEl.textContent = 'loading…';
+    try {
+      const res = await fetch('/services');
+      const data = await asJson(res);
+      contentItems = (data && data.services) || [];
+      statusEl.textContent = `${contentItems.length} service(s)`;
+    } catch (e) {
+      statusEl.textContent = 'failed to load: ' + e.message;
+      contentItems = [];
+    }
+    renderContentGrid();
+  }
+
+  function kindBadgeClass(kind) {
+    if (kind === 'output') return 'badge output';
+    if (kind === 'attached') return 'badge attached';
+    return 'badge';
+  }
+
+  function renderContentGrid() {
+    const filter = document.getElementById('content-filter').value.trim().toLowerCase();
+    const grid = document.getElementById('content-grid');
+    const filtered = contentItems.filter((item) => {
+      if (!filter) return true;
+      return (item.name || '').toLowerCase().includes(filter) || String(item.id).toLowerCase().includes(filter);
+    });
+    if (!filtered.length) {
+      grid.innerHTML = '<div class="empty-state">No services found. Try Upload, or clear the filter.</div>';
+      return;
+    }
+    grid.innerHTML = filtered.map((item) => {
+      const linkId = item.kind === 'service' ? item.id : (item.slug || item.id);
+      const meta = item.kind === 'service' ? (item.format || '') : (item.function_id || '');
+      return `
+        <div class="card" onclick="location.hash='#/item/' + encodeURIComponent('${linkId}')">
+          <span class="${kindBadgeClass(item.kind)}">${item.kind}</span>
+          <div class="name" title="${item.name || ''}">${item.name || '(unnamed)'}</div>
+          <div class="meta">${meta}</div>
+        </div>`;
+    }).join('');
+  }
+
+  function openUploadModal() {
+    document.getElementById('up-name').value = '';
+    document.getElementById('up-description').value = '';
+    document.getElementById('up-file').value = '';
+    document.getElementById('ref-uri').value = '';
+    show('upload-output', '');
+    openModal('upload-modal');
+  }
+
+  async function uploadService() {
+    const fileInput = document.getElementById('up-file');
+    if (!fileInput.files.length) {
+      show('upload-output', 'select a file first');
+      return;
+    }
+    const form = new FormData();
+    const name = document.getElementById('up-name').value.trim();
+    const description = document.getElementById('up-description').value.trim();
+    if (name) form.append('name', name);
+    if (description) form.append('description', description);
+    form.append('file', fileInput.files[0]);
+    const res = await fetch('/admin/services/upload', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+    });
+    const data = await asJson(res);
+    show('upload-output', data);
+    if (data && data.service_id) {
+      closeModal('upload-modal');
+      loadContent();
+      location.hash = '#/item/' + encodeURIComponent(data.service_id);
+    }
+  }
+
+  async function referenceService() {
+    const name = document.getElementById('up-name').value.trim();
+    const description = document.getElementById('up-description').value.trim();
+    const storage_uri = document.getElementById('ref-uri').value.trim();
+    if (!storage_uri) {
+      show('upload-output', 'enter a storage_uri first');
+      return;
+    }
+    const res = await fetch('/admin/services/reference', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ name: name || storage_uri, description: description || undefined, storage_uri }),
+    });
+    const data = await asJson(res);
+    show('upload-output', data);
+    if (data && data.service_id) {
+      closeModal('upload-modal');
+      loadContent();
+      location.hash = '#/item/' + encodeURIComponent(data.service_id);
+    }
+  }
+
+  // ============================================================
+  // Item (GET /services/{id})  — id is a UUID (base) or a slug (virtual)
+  // ============================================================
+  let currentItem = null;
+  let currentItemId = null;
+
+  async function loadItem(id) {
+    currentItemId = id;
+    document.getElementById('item-title').textContent = id;
+    document.getElementById('item-breadcrumb-name').textContent = id;
+    itemShowTab('details');
+    const res = await fetch(`/services/${encodeURIComponent(id)}`);
+    const data = await asJson(res);
+    currentItem = (data && !data.error) ? data : null;
+    show('item-resource-json', data);
+    renderItemCard(data);
+  }
+
+  function renderItemCard(data) {
+    const card = document.getElementById('item-resource-card');
+    const attachedFieldset = document.getElementById('item-attached-fieldset');
+    const attachedList = document.getElementById('item-attached-list');
+    if (!data || data.error) {
+      card.innerHTML = '<div class="empty-state">Not found.</div>';
+      attachedFieldset.style.display = 'none';
+      return;
+    }
+    document.getElementById('item-title').textContent = data.name || data.slug || currentItemId;
+    document.getElementById('item-breadcrumb-name').textContent = data.name || data.slug || currentItemId;
+
+    if (data.type === 'Service') {
+      const extent = data.extent;
+      const extentRow = extent
+        ? `<tr><td>extent</td><td>${extent.width}&times;${extent.height}px, ${extent.band_count} band(s), ${extent.data_type || 'unknown type'}, EPSG:${extent.epsg_code ?? '?'}</td></tr>`
+        : `<tr><td>extent</td><td><em>not available &mdash; CRS/geotransform not detected</em></td></tr>`;
+      card.innerHTML = `
+        <table>
+          <tr><td>kind</td><td>service</td></tr>
+          <tr><td>name</td><td>${data.name || ''}</td></tr>
+          <tr><td>description</td><td>${data.description || '<em>none</em>'}</td></tr>
+          <tr><td>format</td><td>${data.format || ''}</td></tr>
+          <tr><td>crs</td><td>${data.crs || '<em>unknown</em>'}</td></tr>
+          <tr><td>storage_uri</td><td>${data.storage_uri || ''}</td></tr>
+          ${extentRow}
+        </table>`;
+      const attached = data.attached_services || [];
+      if (attached.length) {
+        attachedFieldset.style.display = '';
+        attachedList.innerHTML = `<table><tr><th>slug</th><th>kind</th><th>function</th><th></th></tr>${
+          attached.map((s) => `<tr>
+              <td>${s.slug}</td><td>${s.service_kind}</td><td>${s.function_id}</td>
+              <td><a href="#/item/${encodeURIComponent(s.slug)}">open</a></td>
+            </tr>`).join('')
+        }</table>`;
+      } else {
+        attachedFieldset.style.display = 'none';
+      }
+    } else {
+      // VirtualService (attached vRPM or pRPM output)
+      const parent = data.parent_service || {};
+      attachedFieldset.style.display = 'none';
+      card.innerHTML = `
+        <table>
+          <tr><td>kind</td><td>${data.service_kind || 'virtual'}</td></tr>
+          <tr><td>slug</td><td>${data.slug || ''}</td></tr>
+          <tr><td>function_id</td><td>${data.function_id || ''}</td></tr>
+          <tr><td>params_defaults</td><td><code>${JSON.stringify(data.params_defaults || {})}</code></td></tr>
+          <tr><td>parent service</td><td>${parent.name || ''} <a href="#/item/${encodeURIComponent(parent.id || '')}">(${parent.id || ''})</a></td></tr>
+        </table>`;
+    }
+  }
+
+  function itemShowTab(tab) {
+    ['details', 'map', 'debug'].forEach((t) => {
+      document.getElementById('item-tab-' + t).style.display = t === tab ? '' : 'none';
+    });
+    if (tab === 'map' && itemMap) setTimeout(() => itemMap.invalidateSize(), 50);
+  }
+
+  async function itemLoadDebug() {
+    if (!currentItemId) return;
+    // Debug only applies to base services (UUIDs); virtual services are
+    // resolved to their parent before debugging.
+    let id = currentItemId;
+    if (currentItem && currentItem.type !== 'Service' && currentItem.parent_service) {
+      id = currentItem.parent_service.id;
+    }
+    const res = await fetch(`/admin/services/${encodeURIComponent(id)}/debug`, { headers: authHeaders() });
+    show('item-debug-output', await asJson(res));
+  }
+
+  // ---- item map ----
+  let itemMap = null;
+  let itemOverlay = null;
+  let itemFootprintLayer = null;
+
+  function ensureItemMap() {
+    if (itemMap) return itemMap;
+    itemMap = L.map('item-map', { worldCopyJump: true }).setView([20, 25], 2);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 19,
+    }).addTo(itemMap);
+    return itemMap;
+  }
+
+  function itemTileUrlTemplate() {
+    const format = document.getElementById('item-tile-format').value.trim() || 'webp';
+    if (currentItem && currentItem.type !== 'Service') {
+      return `/services/${encodeURIComponent(currentItem.slug)}/tiles/{z}/{x}/{y}?format=${encodeURIComponent(format)}`;
+    }
+    return `/tiles/{z}/{x}/{y}?service_id=${encodeURIComponent(currentItemId)}&format=${encodeURIComponent(format)}`;
+  }
+
+  function itemViewInMap() {
+    itemShowTab('map');
+    itemLoadOverlay();
+  }
+
+  async function itemLoadOverlay() {
+    const map = ensureItemMap();
+    if (itemOverlay) map.removeLayer(itemOverlay);
+    const url = itemTileUrlTemplate();
+    const statusEl = document.getElementById('item-tile-status');
+    statusEl.textContent = 'loading: ' + url;
+    let loaded = 0, errored = 0;
+    itemOverlay = L.tileLayer(url, {
+      opacity: 0.85,
+      maxZoom: 19,
+      errorTileUrl:
+        'data:image/svg+xml;base64,' +
+        btoa('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">' +
+             '<rect width="256" height="256" fill="#300"/>' +
+             '<text x="10" y="20" fill="#f66" font-size="14">tile error</text></svg>'),
+    });
+    itemOverlay.on('tileload', () => { loaded++; statusEl.textContent = `loaded ${loaded}, ${errored} error(s)`; });
+    itemOverlay.on('tileerror', () => { errored++; statusEl.textContent = `loaded ${loaded}, ${errored} error(s)`; });
+    itemOverlay.addTo(map);
+    await itemRefreshFootprint();
+  }
+
+  // Resolves the base service backing whatever's currently loaded — direct
+  // id in service mode, or the virtual service's parent_service (attached
+  // functions render a parent COG's bands, so its real footprint matters).
+  function itemResolveServiceId() {
+    if (currentItem && currentItem.type !== 'Service') {
+      return (currentItem.parent_service && currentItem.parent_service.id) || null;
+    }
+    return currentItemId;
+  }
+
+  async function itemRefreshFootprint() {
+    const map = ensureItemMap();
+    if (itemFootprintLayer) { map.removeLayer(itemFootprintLayer); itemFootprintLayer = null; }
+    const statusEl = document.getElementById('item-tile-status');
+    const serviceId = itemResolveServiceId();
+    if (!serviceId) return;
+    try {
+      const res = await fetch(`/admin/services/${encodeURIComponent(serviceId)}/debug`, { headers: authHeaders() });
+      if (!res.ok) {
+        statusEl.textContent += ' (footprint: admin token required or service not found)';
+        return;
+      }
+      const data = await asJson(res);
+      const ring = data && data.footprint_wgs84;
+      if (!ring || !ring.length) {
+        statusEl.textContent += ' (no footprint available — CRS/geotransform not detected)';
+        return;
+      }
+      const latlngs = ring.map(([lon, lat]) => [lat, lon]);
+      itemFootprintLayer = L.polygon(latlngs, { color: '#ffb703', weight: 2, fill: false }).addTo(map);
+    } catch (e) {
+      statusEl.textContent += ' (footprint fetch failed: ' + e.message + ')';
+    }
+  }
+
+  async function itemZoomTo() {
+    if (!itemFootprintLayer) await itemRefreshFootprint();
+    if (itemFootprintLayer) ensureItemMap().fitBounds(itemFootprintLayer.getBounds());
+  }
+
+  // ---- delete modal ----
+  function openDeleteModal() {
+    if (!currentItemId) return;
+    show('delete-output', '');
+    openModal('delete-modal');
+  }
+
+  function deleteTargetId() {
+    // Soft-delete/purge always operate on a base service UUID.
+    if (currentItem && currentItem.type !== 'Service' && currentItem.parent_service) {
+      return currentItem.parent_service.id;
+    }
+    return currentItemId;
+  }
+
+  async function deleteSoft() {
+    const id = deleteTargetId();
+    const res = await fetch(`/admin/services/${encodeURIComponent(id)}/delete`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ reason: 'deleted via console' }),
+    });
+    show('delete-output', await asJson(res));
+  }
+
+  async function deletePurge() {
+    const id = deleteTargetId();
+    const res = await fetch(`/admin/services/${encodeURIComponent(id)}/purge`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    show('delete-output', `HTTP ${res.status}`);
+    if (res.status === 204) {
+      setTimeout(() => {
+        closeModal('delete-modal');
+        location.hash = '#/content';
+      }, 600);
+    }
+  }
+
+  // ============================================================
+  // Analysis (GET /plugins + dynamic ParameterSpec form)
+  // ============================================================
+  let pluginCache = [];
+  let currentPlugin = null;
+
+  async function loadAnalysis() {
+    const list = document.getElementById('plugin-list');
+    list.innerHTML = '<span class="hint">loading…</span>';
+    try {
+      const res = await fetch('/plugins');
+      const data = await asJson(res);
+      pluginCache = Array.isArray(data) ? data : [];
+    } catch (e) {
+      list.innerHTML = '<span class="hint">failed to load plugins: ' + e.message + '</span>';
+      return;
+    }
+    if (!pluginCache.length) {
+      list.innerHTML = '<span class="hint">no plugins registered</span>';
+      return;
+    }
+    list.innerHTML = pluginCache.map((p, i) =>
+      `<button class="action secondary" onclick="selectPlugin(${i})">${p.id} <span class="hint">(${p.model_kind})</span></button>`
+    ).join('');
+  }
+
+  async function selectPlugin(index) {
+    currentPlugin = pluginCache[index];
+    document.querySelectorAll('#plugin-list button').forEach((b, i) => {
+      b.style.borderColor = i === index ? '#3f7fb0' : '';
+    });
+    document.getElementById('analysis-form-wrap').style.display = '';
+    document.getElementById('analysis-form-title').textContent = `${currentPlugin.id} (${currentPlugin.model_kind})`;
+    document.getElementById('analysis-form-description').textContent =
+      (currentPlugin.metadata && currentPlugin.metadata.description) || '';
+    show('analysis-output', '');
+    document.getElementById('analysis-poll-status').textContent = '';
+
+    const isVrpm = currentPlugin.model_kind === 'vrpm';
+    document.getElementById('analysis-attach-fields').style.display = isVrpm ? '' : 'none';
+    document.getElementById('analysis-submit-btn').textContent = isVrpm ? 'Attach' : 'Submit job';
+
+    if (isVrpm) {
+      await populateParentServicePicker();
+    }
+    renderAnalysisForm(currentPlugin.inputs || []);
+  }
+
+  async function populateParentServicePicker() {
+    const select = document.getElementById('analysis-parent-service');
+    select.innerHTML = '<option value="">loading…</option>';
+    try {
+      const res = await fetch('/services');
+      const data = await asJson(res);
+      const services = ((data && data.services) || []).filter((s) => s.kind === 'service');
+      select.innerHTML = services.length
+        ? services.map((s) => `<option value="${s.id}">${s.name} (${String(s.id).slice(0, 8)}…)</option>`).join('')
+        : '<option value="">no base services available — upload one first</option>';
+    } catch (e) {
+      select.innerHTML = '<option value="">failed to load services</option>';
+    }
+  }
+
+  function widgetForParam(spec) {
+    const id = 'field-' + spec.name;
+    const def = spec.default !== undefined && spec.default !== null ? spec.default : '';
+    switch (spec.param_type) {
+      case 'band':
+        return `<input type="number" id="${id}" min="1" step="1" value="${def}" />`;
+      case 'number':
+        return `<input type="number" id="${id}" step="any" value="${def}"${spec.minimum != null ? ` min="${spec.minimum}"` : ''}${spec.maximum != null ? ` max="${spec.maximum}"` : ''} />`;
+      case 'boolean':
+        return `<input type="checkbox" id="${id}" ${def ? 'checked' : ''} />`;
+      case 'service':
+        return `<select id="${id}" data-service-picker="1"></select>`;
+      case 'string_list':
+      case 'number_list':
+        return `<input type="text" id="${id}" placeholder="comma-separated" value="${Array.isArray(def) ? def.join(',') : def}" />`;
+      case 'band_name':
+      case 'string':
+      default:
+        return `<input type="text" id="${id}" value="${def}" />`;
+    }
+  }
+
+  function renderAnalysisForm(specs) {
+    const wrap = document.getElementById('analysis-dynamic-form');
+    const inputs = specs.filter((s) => (s.direction || 'input') === 'input' && !String(s.param_type).startsWith('output_'));
+    if (!inputs.length) {
+      wrap.innerHTML = '<div class="hint">This plugin has no input parameters.</div>';
+      return;
+    }
+    wrap.innerHTML = inputs.map((spec) => `
+      <div class="form-field">
+        <label>${spec.name}${spec.required ? ' *' : ''} <span class="hint">(${spec.param_type})</span></label>
+        ${widgetForParam(spec)}
+        ${spec.description ? `<div class="field-hint">${spec.description}</div>` : ''}
+      </div>
+    `).join('');
+
+    // Fill any service-picker widgets with the base service list.
+    const pickers = wrap.querySelectorAll('[data-service-picker]');
+    if (pickers.length) {
+      fetch('/services').then(asJson).then((data) => {
+        const services = ((data && data.services) || []).filter((s) => s.kind === 'service');
+        const options = services.map((s) => `<option value="${s.id}">${s.name} (${String(s.id).slice(0, 8)}…)</option>`).join('');
+        pickers.forEach((el) => { el.innerHTML = options; });
+      });
+    }
+  }
+
+  function collectFormValues(specs) {
+    const inputs = specs.filter((s) => (s.direction || 'input') === 'input' && !String(s.param_type).startsWith('output_'));
+    const values = {};
+    const serviceIds = [];
+    for (const spec of inputs) {
+      const el = document.getElementById('field-' + spec.name);
+      if (!el) continue;
+      let value;
+      switch (spec.param_type) {
+        case 'band':
+          value = parseInt(el.value, 10);
+          break;
+        case 'number':
+          value = parseFloat(el.value);
+          break;
+        case 'boolean':
+          value = el.checked;
+          break;
+        case 'service':
+          value = el.value;
+          if (value) serviceIds.push(value);
+          break;
+        case 'string_list':
+          value = el.value.split(',').map((s) => s.trim()).filter(Boolean);
+          break;
+        case 'number_list':
+          value = el.value.split(',').map((s) => parseFloat(s.trim())).filter((n) => !isNaN(n));
+          break;
+        default:
+          value = el.value;
+      }
+      if (value !== '' && value !== undefined && !(typeof value === 'number' && isNaN(value))) {
+        values[spec.name] = value;
+      }
+    }
+    return { values, serviceIds };
+  }
+
+  async function analysisSubmit() {
+    if (!currentPlugin) return;
+    const { values, serviceIds } = collectFormValues(currentPlugin.inputs || []);
+
+    if (currentPlugin.model_kind === 'vrpm') {
+      const parentId = document.getElementById('analysis-parent-service').value;
+      if (!parentId) {
+        show('analysis-output', 'select a service to attach to first');
+        return;
+      }
+      const endpointSlug = document.getElementById('analysis-endpoint-slug').value.trim() || undefined;
+      const res = await fetch(`/admin/services/${encodeURIComponent(parentId)}/attach`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ function_id: currentPlugin.id, params_defaults: values, endpoint_slug: endpointSlug }),
+      });
+      const data = await asJson(res);
+      show('analysis-output', data);
+      if (data && data.slug) {
+        document.getElementById('analysis-poll-status').innerHTML =
+          `attached — <a href="#/item/${encodeURIComponent(data.slug)}">open service</a>`;
+      }
+      return;
+    }
+
+    // pRPM: submit async job, then poll.
+    const res = await fetch(`/ogc/processes/${encodeURIComponent(currentPlugin.id)}/execution`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputs: values, services: serviceIds }),
+    });
+    const data = await asJson(res);
+    show('analysis-output', data);
+    if (data && data.job_id) {
+      pollAnalysisJob(data.job_id);
+    }
+  }
+
+  async function pollAnalysisJob(jobId) {
+    const statusEl = document.getElementById('analysis-poll-status');
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const res = await fetch(`/status/${jobId}`);
+      const data = await asJson(res);
+      statusEl.textContent = `job ${jobId}: ${data.state} (${Math.round((data.progress || 0) * 100)}%)`;
+      if (data.state === 'succeeded' || data.state === 'failed') {
+        show('analysis-output', data);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    statusEl.textContent += ' — gave up polling after 60 attempts';
+  }
+
+  // ============================================================
+  // Dev tab (raw panels)
+  // ============================================================
   async function checkHealth() {
     const res = await fetch('/health');
     show('health-output', await asJson(res));
   }
 
-  // ---- stac ----
   async function stacSearch() {
     const bbox = document.getElementById('stac-bbox').value.trim();
     const limit = document.getElementById('stac-limit').value.trim() || '10';
@@ -266,246 +953,42 @@
         <td>${f.id}</td>
         <td>${(f.properties && f.properties.title) || ''}</td>
         <td>${(f.properties && f.properties['mantle:format']) || ''}</td>
-        <td><button class="action" onclick="useDataset('${f.id}')">use in Tiles/Datasets</button></td>
+        <td><a href="#/item/${encodeURIComponent(f.id)}">open item</a></td>
       </tr>`).join('');
     table.innerHTML = `<table><tr><th>id</th><th>name</th><th>format</th><th></th></tr>${rows}</table>`;
   }
 
-  function useDataset(id) {
-    document.getElementById('mgmt-id').value = id;
-    document.getElementById('tile-dataset-id').value = id;
-    document.getElementById('tile-mode').value = 'dataset';
-    loadDatasetResource();
+  let devMap = null;
+  let devOverlay = null;
+
+  function ensureDevMap() {
+    if (devMap) return devMap;
+    devMap = L.map('dev-map', { worldCopyJump: true }).setView([20, 25], 2);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 19,
+    }).addTo(devMap);
+    return devMap;
   }
 
-  // ---- datasets (admin) ----
-  async function uploadDataset() {
-    const fileInput = document.getElementById('up-file');
-    if (!fileInput.files.length) {
-      show('upload-output', 'select a file first');
-      return;
-    }
-    const form = new FormData();
-    const name = document.getElementById('up-name').value.trim();
-    const description = document.getElementById('up-description').value.trim();
-    if (name) form.append('name', name);
-    if (description) form.append('description', description);
-    form.append('file', fileInput.files[0]);
-    const res = await fetch('/admin/datasets/upload', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: form,
-    });
-    const data = await asJson(res);
-    show('upload-output', data);
-    if (data && data.dataset_id) useDataset(data.dataset_id);
-  }
-
-  async function referenceDataset() {
-    const name = document.getElementById('ref-name').value.trim();
-    const description = document.getElementById('ref-description').value.trim();
-    const storage_uri = document.getElementById('ref-uri').value.trim();
-    const res = await fetch('/admin/datasets/reference', {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ name, description: description || undefined, storage_uri }),
-    });
-    const data = await asJson(res);
-    show('reference-output', data);
-    if (data && data.dataset_id) useDataset(data.dataset_id);
-  }
-
-  function mgmtId() {
-    return document.getElementById('mgmt-id').value.trim();
-  }
-
-  // ---- dataset resource (GET /datasets/{id}) ----
-  async function loadDatasetResource() {
-    const id = mgmtId();
-    const card = document.getElementById('dataset-resource-card');
-    if (!id) {
-      card.innerHTML = '';
-      show('dataset-resource-output', 'enter a dataset_id first');
-      return;
-    }
-    const res = await fetch(`/datasets/${id}`);
-    const data = await asJson(res);
-    show('dataset-resource-output', data);
-    renderDatasetCard(data);
-  }
-
-  function renderDatasetCard(data) {
-    const card = document.getElementById('dataset-resource-card');
-    if (!data || data.error) {
-      card.innerHTML = '';
-      return;
-    }
-    const extent = data.extent;
-    const extentRow = extent
-      ? `<tr><td>extent</td><td>${extent.width}&times;${extent.height}px, ${extent.band_count} band(s), ${extent.data_type || 'unknown type'}, EPSG:${extent.epsg_code ?? '?'}</td></tr>`
-      : `<tr><td>extent</td><td><em>not available &mdash; CRS/geotransform not detected</em></td></tr>`;
-    const linkRows = (data.links || [])
-      .map((l) => `<tr><td>${l.rel}</td><td>${l.method} ${l.href}${l.auth ? ' <em>(' + l.auth + ')</em>' : ''}</td></tr>`)
-      .join('');
-    card.innerHTML = `
-      <table>
-        <tr><td>name</td><td>${data.name || ''}</td></tr>
-        <tr><td>description</td><td>${data.description || '<em>none</em>'}</td></tr>
-        <tr><td>format</td><td>${data.format || ''}</td></tr>
-        <tr><td>crs</td><td>${data.crs || '<em>unknown</em>'}</td></tr>
-        <tr><td>storage_uri</td><td>${data.storage_uri || ''}</td></tr>
-        ${extentRow}
-      </table>
-      <div class="hint">operations</div>
-      <table>${linkRows}</table>
-    `;
-  }
-
-  function viewInTiles() {
-    const id = mgmtId();
-    if (!id) return;
-    document.getElementById('tile-dataset-id').value = id;
-    document.getElementById('tile-mode').value = 'dataset';
-    document.querySelector('#tabs button[data-tab="tiles"]').click();
-    loadOverlay();
-  }
-
-  async function datasetDebug() {
-    const res = await fetch(`/admin/datasets/${mgmtId()}/debug`, { headers: authHeaders() });
-    show('mgmt-output', await asJson(res));
-  }
-
-  async function datasetDelete() {
-    const res = await fetch(`/admin/datasets/${mgmtId()}/delete`, {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ reason: 'deleted via console' }),
-    });
-    show('mgmt-output', await asJson(res));
-  }
-
-  async function datasetPurge() {
-    const res = await fetch(`/admin/datasets/${mgmtId()}/purge`, {
-      method: 'POST',
-      headers: authHeaders(),
-    });
-    show('mgmt-output', `HTTP ${res.status}`);
-  }
-
-  async function attachFunction() {
-    const function_id = document.getElementById('attach-fn').value.trim();
-    const endpoint_slug = document.getElementById('attach-slug').value.trim() || undefined;
-    let params_defaults = {};
-    try {
-      params_defaults = JSON.parse(document.getElementById('attach-params').value || '{}');
-    } catch (e) {
-      show('mgmt-output', 'invalid params_defaults JSON: ' + e.message);
-      return;
-    }
-    const res = await fetch(`/admin/services/${mgmtId()}/attach`, {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ function_id, params_defaults, endpoint_slug }),
-    });
-    const data = await asJson(res);
-    show('mgmt-output', data);
-    if (data && data.slug) document.getElementById('tile-slug').value = data.slug;
-  }
-
-  // ---- tiles (native leaflet viewer) ----
-  const map = L.map('map', { worldCopyJump: true }).setView([20, 25], 2);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors',
-    maxZoom: 19,
-  }).addTo(map);
-  let overlay = null;
-
-  function tileUrlTemplate() {
+  async function devLoadOverlay() {
+    const map = ensureDevMap();
+    if (devOverlay) map.removeLayer(devOverlay);
     const format = document.getElementById('tile-format').value.trim() || 'webp';
     const mode = document.getElementById('tile-mode').value;
-    if (mode === 'service') {
-      const slug = document.getElementById('tile-slug').value.trim();
-      return `/services/${encodeURIComponent(slug)}/tiles/{z}/{x}/{y}?format=${encodeURIComponent(format)}`;
-    }
-    const datasetId = document.getElementById('tile-dataset-id').value.trim();
-    return `/tiles/{z}/{x}/{y}?dataset_id=${encodeURIComponent(datasetId)}&format=${encodeURIComponent(format)}`;
-  }
-
-  async function loadOverlay() {
-    if (overlay) map.removeLayer(overlay);
-    const url = tileUrlTemplate();
-    const statusEl = document.getElementById('tile-status');
+    const url = mode === 'virtual'
+      ? `/services/${encodeURIComponent(document.getElementById('tile-slug').value.trim())}/tiles/{z}/{x}/{y}?format=${encodeURIComponent(format)}`
+      : `/tiles/{z}/{x}/{y}?service_id=${encodeURIComponent(document.getElementById('tile-service-id').value.trim())}&format=${encodeURIComponent(format)}`;
+    const statusEl = document.getElementById('dev-tile-status');
     statusEl.textContent = 'loading: ' + url;
     let loaded = 0, errored = 0;
-    overlay = L.tileLayer(url, {
-      opacity: 0.85,
-      maxZoom: 19,
-      errorTileUrl:
-        'data:image/svg+xml;base64,' +
-        btoa('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">' +
-             '<rect width="256" height="256" fill="#300"/>' +
-             '<text x="10" y="20" fill="#f66" font-size="14">tile error</text></svg>'),
-    });
-    overlay.on('tileload', () => { loaded++; statusEl.textContent = `loaded ${loaded}, ${errored} error(s)`; });
-    overlay.on('tileerror', () => { errored++; statusEl.textContent = `loaded ${loaded}, ${errored} error(s)`; });
-    overlay.addTo(map);
-    await refreshFootprint();
+    devOverlay = L.tileLayer(url, { opacity: 0.85, maxZoom: 19 });
+    devOverlay.on('tileload', () => { loaded++; statusEl.textContent = `loaded ${loaded}, ${errored} error(s)`; });
+    devOverlay.on('tileerror', () => { errored++; statusEl.textContent = `loaded ${loaded}, ${errored} error(s)`; });
+    devOverlay.addTo(map);
   }
 
-  // Resolves the dataset backing whatever's currently loaded — direct
-  // dataset_id in "raw dataset" mode, or the service's parent_dataset in
-  // "vRPM service" mode (attached functions render a parent COG's bands,
-  // so its real footprint is what matters for the outline/zoom).
-  async function resolveDatasetId() {
-    const mode = document.getElementById('tile-mode').value;
-    if (mode === 'service') {
-      const slug = document.getElementById('tile-slug').value.trim();
-      if (!slug) return null;
-      const res = await fetch(`/services/${encodeURIComponent(slug)}`);
-      if (!res.ok) return null;
-      const data = await asJson(res);
-      return data && data.parent_dataset && data.parent_dataset.id;
-    }
-    return document.getElementById('tile-dataset-id').value.trim() || null;
-  }
-
-  let footprintLayer = null;
-
-  // Draws the dataset's real footprint (from GET /admin/datasets/{id}/debug
-  // -> footprint_wgs84, reprojected server-side via oxigdal — the same
-  // source of truth the tile renderer itself uses, so it can't drift out of
-  // sync with what's actually drawn) as an outline over the loaded tiles.
-  async function refreshFootprint() {
-    if (footprintLayer) { map.removeLayer(footprintLayer); footprintLayer = null; }
-    const statusEl = document.getElementById('tile-status');
-    const datasetId = await resolveDatasetId();
-    if (!datasetId) return;
-    try {
-      const res = await fetch(`/admin/datasets/${datasetId}/debug`, { headers: authHeaders() });
-      if (!res.ok) {
-        statusEl.textContent += ' (footprint: admin token required or dataset not found)';
-        return;
-      }
-      const data = await asJson(res);
-      const ring = data && data.footprint_wgs84;
-      if (!ring || !ring.length) {
-        statusEl.textContent += ' (no footprint available — CRS/geotransform not detected)';
-        return;
-      }
-      const latlngs = ring.map(([lon, lat]) => [lat, lon]);
-      footprintLayer = L.polygon(latlngs, { color: '#ffb703', weight: 2, fill: false }).addTo(map);
-    } catch (e) {
-      statusEl.textContent += ' (footprint fetch failed: ' + e.message + ')';
-    }
-  }
-
-  async function zoomToDataset() {
-    if (!footprintLayer) await refreshFootprint();
-    if (footprintLayer) map.fitBounds(footprintLayer.getBounds());
-  }
-
-  // ---- plugins ----
-  async function listPlugins() {
+  async function listPluginsRaw() {
     const res = await fetch('/plugins');
     const data = await asJson(res);
     show('plugins-output', data);
@@ -516,8 +999,7 @@
       : '';
   }
 
-  // ---- jobs ----
-  async function submitJob() {
+  async function submitJobRaw() {
     const processId = document.getElementById('job-process').value.trim();
     let inputs = {};
     try {
@@ -529,18 +1011,23 @@
     const res = await fetch(`/ogc/processes/${encodeURIComponent(processId)}/execution`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ inputs, datasets: [] }),
+      body: JSON.stringify({ inputs, services: [] }),
     });
     const data = await asJson(res);
     show('submit-output', data);
     if (data && data.job_id) document.getElementById('job-id').value = data.job_id;
   }
 
-  async function pollJob() {
+  async function pollJobRaw() {
     const id = document.getElementById('job-id').value.trim();
     const res = await fetch(`/status/${id}`);
     show('poll-output', await asJson(res));
   }
+
+  // ============================================================
+  // Boot
+  // ============================================================
+  renderRoute();
 </script>
 </body>
 </html>
