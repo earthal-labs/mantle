@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+
+# Ray schedules @ray.remote tasks (defined in mantle_analytics.tasks) onto
+# whichever cluster node's worker process picks them up — not just the
+# client (analytics-worker) that calls ray.init(). The bare rayproject image
+# has neither `mantle_analytics` nor most of its runtime deps installed, so
+# every pRPM job failed with "No module named 'mantle_analytics'" the moment
+# Ray actually ran it on ray-head/ray-worker.
+FROM rayproject/ray:2.40.0-py311
+
+WORKDIR /app
+
+COPY python/pyproject.toml python/README.md ./
+COPY python/mantle_analytics ./mantle_analytics
+
+# Ray itself is already installed at the correct version by the base image
+# — pin the remaining runtime deps to the exact versions resolved in
+# python/uv.lock (kept in sync with Dockerfile.analytics's `uv sync`) so
+# cluster nodes and the client run identical library versions, then install
+# our own package on top without touching ray.
+RUN pip install --no-cache-dir \
+        numpy==2.4.6 \
+        pyarrow==24.0.0 \
+        redis==8.0.1 \
+        boto3==1.43.40 \
+    && pip install --no-cache-dir --no-deps .

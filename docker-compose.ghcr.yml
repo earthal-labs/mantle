@@ -23,3 +23,11 @@ services:
   vrpm-sidecar:
     image: ${GHCR_IMAGE_PREFIX}/mantle-analytics:${MANTLE_IMAGE_TAG:-latest}
     build: !reset null
+
+  ray-head:
+    image: ${GHCR_IMAGE_PREFIX}/mantle-ray:${MANTLE_IMAGE_TAG:-latest}
+    build: !reset null
+
+  ray-worker:
+    image: ${GHCR_IMAGE_PREFIX}/mantle-ray:${MANTLE_IMAGE_TAG:-latest}
+    build: !reset null

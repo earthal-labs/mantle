@@ -134,7 +134,9 @@ services:
       MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
 
   ray-head:
-    image: rayproject/ray:2.40.0-py311
+    build:
+      context: .
+      dockerfile: Dockerfile.ray
     command: >
       ray start --head
       --dashboard-host=0.0.0.0
@@ -155,7 +157,9 @@ services:
     restart: unless-stopped
 
   ray-worker:
-    image: rayproject/ray:2.40.0-py311
+    build:
+      context: .
+      dockerfile: Dockerfile.ray
     command: ray start --address=ray-head:6380 --block
     depends_on:
       ray-head:

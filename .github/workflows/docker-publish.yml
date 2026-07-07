@@ -28,11 +28,13 @@ jobs:
             dockerfile: Dockerfile.worker
           - image: mantle-analytics
             dockerfile: Dockerfile.analytics
+          - image: mantle-ray
+            dockerfile: Dockerfile.ray
     steps:
       - uses: actions/checkout@v4
 
       - name: Add swap for Rust/DuckDB compile
-        if: matrix.image != 'mantle-analytics'
+        if: matrix.image != 'mantle-analytics' && matrix.image != 'mantle-ray'
         uses: ./.github/actions/setup-swap
         with:
           size-gb: "8"
