@@ -34,6 +34,7 @@ pub struct CloudReferenceRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestionResponse {
     pub service_id: Uuid,
+    pub slug: String,
 }
 
 /// One already-uploaded band file, ready for catalog registration.
@@ -64,6 +65,7 @@ pub struct AddSceneRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddSceneResponse {
     pub service_id: Uuid,
+    pub service_slug: String,
     pub scene_id: Uuid,
     pub asset_ids: Vec<Uuid>,
 }
@@ -121,9 +123,11 @@ impl IngestionService for StubIngestionService {
             return Err(IngestionError::Storage("scene requires at least one asset".into()));
         }
         let now = chrono::Utc::now();
-        self.catalog
+        let service = self
+            .catalog
             .create_service(mantle_catalog::ServiceRecord {
                 id: request.service_id,
+                slug: String::new(),
                 name: request.service_name.clone().unwrap_or_else(|| "untitled".into()),
                 description: request.description.clone(),
                 format: mantle_arrow::ServiceFormat::Cog,
@@ -165,6 +169,7 @@ impl IngestionService for StubIngestionService {
 
         Ok(AddSceneResponse {
             service_id: request.service_id,
+            service_slug: service.slug,
             scene_id: request.scene_id,
             asset_ids,
         })
@@ -186,6 +191,7 @@ impl IngestionService for StubIngestionService {
         self.catalog
             .create_service(mantle_catalog::ServiceRecord {
                 id: service_id,
+                slug: String::new(),
                 name: request.name,
                 description: request.description,
                 format,

@@ -11,6 +11,7 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 
 CREATE TABLE IF NOT EXISTS services (
     id              UUID PRIMARY KEY,
+    slug            TEXT NOT NULL UNIQUE,
     name            TEXT NOT NULL,
     description     TEXT,
     format          TEXT NOT NULL CHECK (format IN ('cog', 'icechunk')),

@@ -2,7 +2,7 @@ use crate::ducklake::DuckLakeSession;
 use crate::error::CatalogError;
 use crate::postgres::{
     fetch_scene, fetch_scene_any, fetch_scenes_for_service, fetch_service, fetch_service_any,
-    insert_asset, insert_footprint_row, insert_scene, insert_service,
+    fetch_service_by_slug, insert_asset, insert_footprint_row, insert_scene, insert_service,
 };
 use crate::services::sanitize_slug;
 use crate::virtual_services::{
@@ -76,9 +76,31 @@ impl PostgresDuckLakeCatalog {
 
 #[async_trait]
 impl crate::CatalogClient for PostgresDuckLakeCatalog {
-    async fn create_service(&self, service: ServiceRecord) -> Result<Uuid, CatalogError> {
+    async fn create_service(&self, mut service: ServiceRecord) -> Result<ServiceRecord, CatalogError> {
+        if let Ok(existing) = fetch_service_any(&self.pool, service.id).await {
+            return Ok(existing);
+        }
+
+        let base_slug = if service.slug.trim().is_empty() {
+            sanitize_slug(&service.name)
+        } else {
+            sanitize_slug(&service.slug)
+        };
+        let mut candidate = base_slug.clone();
+        let mut attempt = 0u32;
+        while slug_exists(&self.pool, &candidate).await? {
+            attempt += 1;
+            candidate = format!("{base_slug}-{attempt}");
+            if attempt > 50 {
+                return Err(CatalogError::Config(
+                    "could not generate a unique service slug".into(),
+                ));
+            }
+        }
+        service.slug = candidate;
+
         insert_service(&self.pool, &service).await?;
-        Ok(service.id)
+        Ok(service)
     }
 
     async fn add_scene(
@@ -153,6 +175,10 @@ impl crate::CatalogClient for PostgresDuckLakeCatalog {
 
     async fn get_service(&self, id: Uuid) -> Result<ServiceRecord, CatalogError> {
         fetch_service(&self.pool, id).await
+    }
+
+    async fn get_service_by_slug(&self, slug: &str) -> Result<ServiceRecord, CatalogError> {
+        fetch_service_by_slug(&self.pool, slug).await
     }
 
     async fn list_scenes(&self, service_id: Uuid) -> Result<Vec<SceneWithAssets>, CatalogError> {
@@ -271,10 +297,13 @@ impl crate::CatalogClient for PostgresDuckLakeCatalog {
 
     async fn register_output_service(
         &self,
-        output_service: ServiceRecord,
+        mut output_service: ServiceRecord,
         function_id: String,
         endpoint_slug: String,
     ) -> Result<VirtualServiceRecord, CatalogError> {
+        if output_service.slug.trim().is_empty() {
+            output_service.slug = sanitize_slug(&output_service.name);
+        }
         let mut tx = self.pool.begin().await?;
         insert_service(&mut *tx, &output_service).await?;
         let record = {

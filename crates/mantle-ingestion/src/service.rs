@@ -48,9 +48,11 @@ impl crate::IngestionService for MantleIngestionService {
         }
 
         let now = chrono::Utc::now();
-        self.catalog
+        let service = self
+            .catalog
             .create_service(ServiceRecord {
                 id: request.service_id,
+                slug: String::new(),
                 name: request.service_name.clone().unwrap_or_else(|| "untitled".into()),
                 description: request.description.clone(),
                 format: ServiceFormat::Cog,
@@ -102,6 +104,7 @@ impl crate::IngestionService for MantleIngestionService {
 
         Ok(AddSceneResponse {
             service_id: request.service_id,
+            service_slug: service.slug,
             scene_id: request.scene_id,
             asset_ids,
         })

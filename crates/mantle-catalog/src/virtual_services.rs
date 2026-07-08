@@ -108,10 +108,17 @@ impl From<VirtualServiceRow> for VirtualServiceRecord {
     }
 }
 
+/// Checks the *whole* flat `/services/{slug}` namespace — base services and
+/// virtual services share one slug space (unified item lookup), so a
+/// candidate slug for either kind must be unique across both tables.
 pub(crate) async fn slug_exists(pool: &PgPool, slug: &str) -> Result<bool, CatalogError> {
     let row: (bool,) = sqlx::query_as(
         r#"
-        SELECT EXISTS(SELECT 1 FROM virtual_services WHERE slug = $1 AND deleted_at IS NULL)
+        SELECT EXISTS(
+            SELECT 1 FROM virtual_services WHERE slug = $1 AND deleted_at IS NULL
+            UNION ALL
+            SELECT 1 FROM services WHERE slug = $1
+        )
         "#,
     )
     .bind(slug)

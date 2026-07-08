@@ -72,15 +72,27 @@ pub async fn delete_by_storage_uri(
     }
 }
 
-/// Object key for one band asset within a scene.
+/// Object key for one band asset within a scene. Named by role, not the
+/// original filename — for a multi-band scene, smashing the role onto the
+/// original name (e.g. `B1_LC09_..._SR_B3.TIF`) is redundant and confusing
+/// (the original name usually already encodes its own band). The role
+/// alone, plus the original extension, is both cleaner and still unique per
+/// scene (`service_assets` has a `UNIQUE (scene_id, band_role)` constraint).
 pub fn scene_asset_object_key(
     service_id: uuid::Uuid,
     scene_id: uuid::Uuid,
     band_role: &str,
     filename: &str,
 ) -> String {
-    let safe_name = sanitize_filename(&format!("{band_role}_{filename}"));
+    let ext = extension_of(filename).unwrap_or("tif");
+    let safe_name = sanitize_filename(&format!("{band_role}.{ext}"));
     format!("services/{service_id}/scenes/{scene_id}/{safe_name}")
+}
+
+/// Best-effort file extension (without the dot), preserving original case.
+fn extension_of(filename: &str) -> Option<&str> {
+    let base = filename.rsplit('/').next().unwrap_or(filename);
+    base.rsplit_once('.').map(|(_, ext)| ext).filter(|e| !e.is_empty())
 }
 
 pub fn storage_uri(bucket: &str, key: &str) -> String {
@@ -165,8 +177,17 @@ mod tests {
         let service_id = uuid::Uuid::nil();
         let scene_id = uuid::Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
         assert_eq!(
-            scene_asset_object_key(service_id, scene_id, "red", "B4.tif"),
-            "services/00000000-0000-0000-0000-000000000000/scenes/11111111-1111-1111-1111-111111111111/red_B4.tif"
+            scene_asset_object_key(service_id, scene_id, "red", "LC09_CU_009005_SR_B4.TIF"),
+            "services/00000000-0000-0000-0000-000000000000/scenes/11111111-1111-1111-1111-111111111111/red.TIF"
+        );
+    }
+
+    #[test]
+    fn scene_asset_key_defaults_extension_when_filename_has_none() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            scene_asset_object_key(id, id, "data", "no_extension"),
+            "services/00000000-0000-0000-0000-000000000000/scenes/00000000-0000-0000-0000-000000000000/data.tif"
         );
     }
 }

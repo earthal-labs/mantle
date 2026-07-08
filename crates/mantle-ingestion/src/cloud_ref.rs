@@ -118,6 +118,7 @@ pub(crate) async fn register_cloud_reference(
         .catalog
         .create_service(mantle_catalog::ServiceRecord {
             id: service_id,
+            slug: String::new(),
             name: request.name,
             description: request.description,
             format,

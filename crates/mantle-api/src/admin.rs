@@ -253,9 +253,15 @@ pub async fn register_cloud_reference(
         .register_cloud_reference(body)
         .await
         .map_err(ApiError::from)?;
+    let slug = state
+        .catalog
+        .get_service(service_id)
+        .await
+        .map(|service| service.slug)
+        .unwrap_or_default();
 
     info!(%service_id, "cloud reference registered via admin API");
-    Ok(Json(IngestionResponse { service_id }))
+    Ok(Json(IngestionResponse { service_id, slug }))
 }
 
 #[derive(Debug, Deserialize, Default)]

@@ -56,6 +56,12 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceRecord {
     pub id: Uuid,
+    /// URL-safe, human-readable identifier, unique across the whole
+    /// `/services/{slug}` namespace (base and virtual services share one
+    /// slug space). Pass an empty string to [`CatalogClient::create_service`]
+    /// to have one generated from `name`.
+    #[serde(default)]
+    pub slug: String,
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -149,7 +155,11 @@ pub struct SpatialQuery {
 #[async_trait]
 pub trait CatalogClient: Send + Sync {
     /// Create a new service container (no scene/asset yet).
-    async fn create_service(&self, service: ServiceRecord) -> Result<Uuid, CatalogError>;
+    /// Create a service container, generating a unique slug from `name` if
+    /// `service.slug` is empty. Idempotent: calling it again for an id that
+    /// already exists just returns the existing record unchanged. Returns
+    /// the record actually stored (with its final slug).
+    async fn create_service(&self, service: ServiceRecord) -> Result<ServiceRecord, CatalogError>;
 
     /// Add a new scene (one or more band assets + one footprint) to an
     /// existing service. One Postgres tx + one DuckLake Parquet append.
@@ -163,6 +173,11 @@ pub trait CatalogClient: Send + Sync {
     async fn spatial_query(&self, query: SpatialQuery) -> Result<Vec<SceneRef>, CatalogError>;
 
     async fn get_service(&self, id: Uuid) -> Result<ServiceRecord, CatalogError>;
+
+    /// Resolve a base service by its public URL slug (the unified item
+    /// lookup tries this when a `/services/{id}` path segment doesn't parse
+    /// as a UUID, before falling back to a virtual service slug).
+    async fn get_service_by_slug(&self, slug: &str) -> Result<ServiceRecord, CatalogError>;
 
     /// List every (non-deleted) scene for a service, each with its full asset list.
     async fn list_scenes(&self, service_id: Uuid) -> Result<Vec<SceneWithAssets>, CatalogError>;
@@ -295,13 +310,27 @@ impl StubCatalogClient {
 
 #[async_trait]
 impl CatalogClient for StubCatalogClient {
-    async fn create_service(&self, service: ServiceRecord) -> Result<Uuid, CatalogError> {
-        let id = service.id;
-        self.base_services
-            .lock()
-            .expect("stub services lock")
-            .insert(id, service);
-        Ok(id)
+    async fn create_service(&self, mut service: ServiceRecord) -> Result<ServiceRecord, CatalogError> {
+        let mut services = self.base_services.lock().expect("stub services lock");
+        if let Some(existing) = services.get(&service.id) {
+            return Ok(existing.clone());
+        }
+        let base_slug = if service.slug.trim().is_empty() {
+            sanitize_slug(&service.name)
+        } else {
+            sanitize_slug(&service.slug)
+        };
+        let taken: std::collections::HashSet<&str> =
+            services.values().map(|s| s.slug.as_str()).collect();
+        let mut candidate = base_slug.clone();
+        let mut attempt = 0u32;
+        while taken.contains(candidate.as_str()) {
+            attempt += 1;
+            candidate = format!("{base_slug}-{attempt}");
+        }
+        service.slug = candidate;
+        services.insert(service.id, service.clone());
+        Ok(service)
     }
 
     async fn add_scene(
@@ -334,6 +363,17 @@ impl CatalogClient for StubCatalogClient {
             .get(&id)
             .cloned()
             .ok_or(CatalogError::NotFound(id))
+    }
+
+    async fn get_service_by_slug(&self, slug: &str) -> Result<ServiceRecord, CatalogError> {
+        let normalized = sanitize_slug(slug);
+        self.base_services
+            .lock()
+            .expect("stub services lock")
+            .values()
+            .find(|s| s.slug == normalized)
+            .cloned()
+            .ok_or_else(|| CatalogError::ServiceNotFound(normalized))
     }
 
     async fn list_scenes(&self, service_id: Uuid) -> Result<Vec<SceneWithAssets>, CatalogError> {
@@ -435,7 +475,7 @@ impl CatalogClient for StubCatalogClient {
 
     async fn register_output_service(
         &self,
-        output_service: ServiceRecord,
+        mut output_service: ServiceRecord,
         function_id: String,
         endpoint_slug: String,
     ) -> Result<VirtualServiceRecord, CatalogError> {
@@ -443,6 +483,9 @@ impl CatalogClient for StubCatalogClient {
         let mut virtual_services = self.virtual_services.lock().expect("stub services lock");
         if virtual_services.contains_key(&slug) {
             return Err(CatalogError::DuplicateSlug(slug));
+        }
+        if output_service.slug.trim().is_empty() {
+            output_service.slug = sanitize_slug(&output_service.name);
         }
         self.base_services
             .lock()
@@ -520,6 +563,7 @@ mod tests {
         catalog
             .create_service(ServiceRecord {
                 id: service_id,
+                slug: String::new(),
                 name: "landsat".into(),
                 description: None,
                 format: ServiceFormat::Cog,
@@ -571,6 +615,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stub_create_service_generates_unique_slugs() {
+        let config = Arc::new(CatalogConfig {
+            postgres_url: "postgres://localhost/mantle".into(),
+            ducklake_data_path: "s3://mantle-data/catalog/".into(),
+            geometry_column: "footprint".into(),
+            purge_retention_days: 7,
+            purge_poll_interval_seconds: 3600,
+        });
+        let catalog = StubCatalogClient::new(config);
+
+        let first = catalog
+            .create_service(ServiceRecord {
+                id: Uuid::new_v4(),
+                slug: String::new(),
+                name: "Landsat 9".into(),
+                description: None,
+                format: ServiceFormat::Cog,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create first");
+        assert_eq!(first.slug, "landsat-9");
+
+        let second = catalog
+            .create_service(ServiceRecord {
+                id: Uuid::new_v4(),
+                slug: String::new(),
+                name: "Landsat 9".into(),
+                description: None,
+                format: ServiceFormat::Cog,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create second");
+        assert_ne!(second.slug, first.slug, "colliding names must get distinct slugs");
+
+        let by_slug = catalog
+            .get_service_by_slug(&first.slug)
+            .await
+            .expect("get_service_by_slug");
+        assert_eq!(by_slug.id, first.id);
+
+        // Idempotent: creating again with the same id returns the original
+        // record (and its original slug), no wasted slug churn.
+        let recreated = catalog
+            .create_service(ServiceRecord {
+                id: first.id,
+                slug: String::new(),
+                name: "Landsat 9".into(),
+                description: None,
+                format: ServiceFormat::Cog,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("recreate");
+        assert_eq!(recreated.slug, first.slug);
+    }
+
+    #[tokio::test]
     #[ignore = "requires postgres, duckdb ducklake+spatial extensions"]
     async fn round_trip_insert_and_query() {
         let config = Arc::new(CatalogConfig {
@@ -589,6 +692,7 @@ mod tests {
         catalog
             .create_service(ServiceRecord {
                 id: service_id,
+                slug: String::new(),
                 name: "integration-test".into(),
                 description: Some("integration test service".into()),
                 format: ServiceFormat::Cog,

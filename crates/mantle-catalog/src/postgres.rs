@@ -28,12 +28,13 @@ where
 {
     sqlx::query(
         r#"
-        INSERT INTO services (id, name, description, format, created_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO services (id, slug, name, description, format, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (id) DO NOTHING
         "#,
     )
     .bind(service.id)
+    .bind(&service.slug)
     .bind(&service.name)
     .bind(&service.description)
     .bind(format_to_db(service.format))
@@ -124,7 +125,7 @@ pub(crate) async fn fetch_service(
 ) -> Result<ServiceRecord, CatalogError> {
     let row = sqlx::query_as::<_, ServiceRow>(
         r#"
-        SELECT id, name, description, format, created_at
+        SELECT id, slug, name, description, format, created_at
         FROM services
         WHERE id = $1
           AND NOT EXISTS (
@@ -140,6 +141,30 @@ pub(crate) async fn fetch_service(
         .ok_or(CatalogError::NotFound(id))
 }
 
+/// Resolve a base service by its public URL slug. Respects the soft-delete
+/// tombstone, same as [`fetch_service`].
+pub(crate) async fn fetch_service_by_slug(
+    pool: &PgPool,
+    slug: &str,
+) -> Result<ServiceRecord, CatalogError> {
+    let row = sqlx::query_as::<_, ServiceRow>(
+        r#"
+        SELECT id, slug, name, description, format, created_at
+        FROM services
+        WHERE slug = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM service_deletions sd WHERE sd.service_id = services.id
+          )
+        "#,
+    )
+    .bind(slug)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(Into::into)
+        .ok_or_else(|| CatalogError::ServiceNotFound(slug.to_string()))
+}
+
 /// Like [`fetch_service`] but ignores the soft-delete tombstone — used only by
 /// the purge routine, which legitimately needs to see a soft-deleted service's
 /// scenes/assets in order to reclaim them.
@@ -149,7 +174,7 @@ pub(crate) async fn fetch_service_any(
 ) -> Result<ServiceRecord, CatalogError> {
     let row = sqlx::query_as::<_, ServiceRow>(
         r#"
-        SELECT id, name, description, format, created_at
+        SELECT id, slug, name, description, format, created_at
         FROM services
         WHERE id = $1
         "#,
@@ -270,6 +295,7 @@ async fn fetch_scene_with_assets(
 #[derive(sqlx::FromRow)]
 struct ServiceRow {
     id: Uuid,
+    slug: String,
     name: String,
     description: Option<String>,
     format: String,
@@ -280,6 +306,7 @@ impl From<ServiceRow> for ServiceRecord {
     fn from(row: ServiceRow) -> Self {
         Self {
             id: row.id,
+            slug: row.slug,
             name: row.name,
             description: row.description,
             format: format_from_db(&row.format),

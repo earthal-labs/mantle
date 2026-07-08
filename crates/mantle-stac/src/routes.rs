@@ -170,8 +170,12 @@ mod tests {
 
     #[async_trait]
     impl CatalogClient for MockCatalog {
-        async fn create_service(&self, service: ServiceRecord) -> Result<Uuid, CatalogError> {
-            Ok(service.id)
+        async fn create_service(&self, service: ServiceRecord) -> Result<ServiceRecord, CatalogError> {
+            Ok(service)
+        }
+
+        async fn get_service_by_slug(&self, slug: &str) -> Result<ServiceRecord, CatalogError> {
+            Err(CatalogError::ServiceNotFound(slug.to_string()))
         }
 
         async fn add_scene(

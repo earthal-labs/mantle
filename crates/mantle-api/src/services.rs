@@ -182,17 +182,21 @@ pub async fn list_services(State(state): State<AppState>) -> Result<Json<Value>,
 }
 
 /// `GET /services/{id}` — unified item lookup. Tries `id` as a base service
-/// UUID first; if that fails to parse, falls back to an attached/output
-/// virtual service slug. One flat namespace, matching ArcGIS's own REST
-/// directory convention.
+/// UUID first; if that fails to parse, tries it as a base service slug, then
+/// falls back to an attached/output virtual service slug. One flat
+/// namespace spanning both slug kinds, matching ArcGIS's own REST directory
+/// convention.
 async fn get_service_resource(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let base = request_base_url(&headers);
-    match Uuid::parse_str(&id) {
-        Ok(service_id) => get_base_service_resource(state, service_id, &base).await,
+    if let Ok(service_id) = Uuid::parse_str(&id) {
+        return get_base_service_resource(state, service_id, &base).await;
+    }
+    match state.catalog.get_service_by_slug(&id).await {
+        Ok(service) => get_base_service_resource(state, service.id, &base).await,
         Err(_) => get_virtual_service_resource(state, &id, &base).await,
     }
 }
@@ -234,6 +238,7 @@ async fn get_base_service_resource(
     Ok(Json(json!({
         "type": "Service",
         "id": service.id,
+        "slug": service.slug,
         "name": service.name,
         "description": service.description,
         "format": service.format,
@@ -244,7 +249,7 @@ async fn get_base_service_resource(
         "scenes": scenes,
         "attached_services": attached_services,
         "links": [
-            {"rel": "self", "href": format!("{base}/services/{}", service.id), "method": "GET"},
+            {"rel": "self", "href": format!("{base}/services/{}", service.slug), "method": "GET"},
             {"rel": "tiles", "href": format!("{base}/tiles/{{z}}/{{x}}/{{y}}?service_id={}", service.id), "method": "GET"},
             {"rel": "stac-items", "href": format!("{base}/stac/collections/mantle/items"), "method": "GET"},
             {"rel": "debug", "href": format!("{base}/admin/services/{}/debug", service.id), "method": "GET", "auth": "admin"},

@@ -72,6 +72,22 @@
   .breadcrumb { font-size: 12px; opacity: 0.6; margin-bottom: 8px; }
   .breadcrumb a { color: #9cf; }
 
+  /* Service Details — ArcGIS REST-directory-style layout */
+  .rest-directory { max-width: 760px; }
+  .rest-service-type { font-size: 13px; font-weight: 400; opacity: 0.6; margin-left: 6px; }
+  .rest-slug { font-size: 12px; opacity: 0.6; margin: -8px 0 14px; }
+  .rest-slug code { font-size: 12px; }
+  .rest-description { font-size: 13px; opacity: 0.85; line-height: 1.5; margin: 0 0 18px; }
+  .rest-kv { margin-bottom: 16px; }
+  .rest-kv th { background: #20242b; color: #9cf; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 8px; text-align: left; }
+  .rest-kv td:first-child { color: #9aa4b2; width: 190px; white-space: nowrap; }
+  .rest-kv td.wrap { white-space: normal; word-break: break-all; }
+  .rest-operations { margin-top: 4px; }
+  .rest-operations h3 { font-size: 11px; color: #9cf; margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .rest-operations ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+  .rest-operations li a { font-size: 12px; }
+  .rest-operations li .op-method { display: inline-block; font-size: 9px; opacity: 0.5; margin-left: 6px; }
+
   /* Modal */
   .modal-backdrop {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -589,20 +605,42 @@
 
     if (data.type === 'Service') {
       const extent = data.extent;
-      const extentRow = extent
-        ? `<tr><td>extent</td><td>${extent.width}&times;${extent.height}px, ${extent.band_count} band(s), ${extent.data_type || 'unknown type'}, EPSG:${extent.epsg_code ?? '?'}</td></tr>`
-        : `<tr><td>extent</td><td><em>not available &mdash; CRS/geotransform not detected</em></td></tr>`;
+      const extentRows = extent
+        ? `
+          <tr><td>Dimensions</td><td>${extent.width} &times; ${extent.height} px</td></tr>
+          <tr><td>Band Count</td><td>${extent.band_count}</td></tr>
+          <tr><td>Pixel Type</td><td>${extent.data_type || 'unknown'}</td></tr>
+          <tr><td>Spatial Reference</td><td>EPSG:${extent.epsg_code ?? '?'}</td></tr>`
+        : `<tr><td>Extent</td><td><em>not available &mdash; CRS/geotransform not detected</em></td></tr>`;
+      const scenes = data.scenes || [];
+      const assetCount = scenes.reduce((n, s) => n + (s.assets ? s.assets.length : 0), 0);
+      const ops = (data.links || []).filter((l) => l.rel !== 'self');
       card.innerHTML = `
-        <table>
-          <tr><td>kind</td><td>service</td></tr>
-          <tr><td>name</td><td>${data.name || ''}</td></tr>
-          <tr><td>description</td><td>${data.description || '<em>none</em>'}</td></tr>
-          <tr><td>format</td><td>${data.format || ''}</td></tr>
-          <tr><td>crs</td><td>${data.crs || '<em>unknown</em>'}</td></tr>
-          <tr><td>storage_uri</td><td>${data.storage_uri || ''}</td></tr>
-          ${extentRow}
-        </table>`;
-      renderScenesList(data.scenes || []);
+        <div class="rest-directory">
+          <div class="rest-service-type">${data.format || 'Service'} Service</div>
+          <div class="rest-slug">Slug: <code>${data.slug || ''}</code> &nbsp;&middot;&nbsp; ID: <code>${data.id || ''}</code></div>
+          <p class="rest-description">${data.description || '<em>No description provided.</em>'}</p>
+
+          <table class="rest-kv">
+            <tr><th colspan="2">Service Description</th></tr>
+            <tr><td>Name</td><td>${data.name || ''}</td></tr>
+            <tr><td>Format</td><td>${data.format || ''}</td></tr>
+            <tr><td>Scenes</td><td>${scenes.length} scene(s), ${assetCount} asset(s)</td></tr>
+            <tr><td>Created</td><td>${data.created_at || ''}</td></tr>
+          </table>
+
+          <table class="rest-kv">
+            <tr><th colspan="2">Raster Info</th></tr>
+            ${extentRows}
+            <tr><td>Storage URI</td><td class="wrap">${data.storage_uri || '<em>none</em>'}</td></tr>
+          </table>
+
+          <div class="rest-operations">
+            <h3>Supported Operations</h3>
+            <ul>${ops.map((l) => `<li><a href="${l.href}" target="_blank" rel="noopener">${l.rel}</a><span class="op-method">${l.method || 'GET'}${l.auth ? ' &middot; ' + l.auth : ''}</span></li>`).join('')}</ul>
+          </div>
+        </div>`;
+      renderScenesList(scenes);
       const attached = data.attached_services || [];
       if (attached.length) {
         attachedFieldset.style.display = '';
