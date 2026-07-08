@@ -7,7 +7,7 @@ use crate::vrpm_client::VrpmSidecarClient;
 use crate::AppState;
 use axum::{
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
@@ -46,6 +46,24 @@ pub struct ServiceTileQuery {
     pub colormap: Option<String>,
     #[serde(flatten)]
     pub overrides: HashMap<String, String>,
+}
+
+/// Absolute origin (`scheme://host`) for the incoming request, used to
+/// build fully-qualified `links[].href` values — matching ArcGIS's own REST
+/// directory convention of publishing complete service URLs rather than
+/// paths a client has to resolve itself. Reads `Host` (required on every
+/// HTTP/1.1+ request) and `X-Forwarded-Proto` (set by any reverse proxy;
+/// defaults to `http` for direct/dev access).
+fn request_base_url(headers: &HeaderMap) -> String {
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http");
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost");
+    format!("{scheme}://{host}")
 }
 
 pub fn services_router() -> Router<AppState> {
@@ -153,11 +171,13 @@ pub async fn list_services(State(state): State<AppState>) -> Result<Json<Value>,
 /// directory convention.
 async fn get_service_resource(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    let base = request_base_url(&headers);
     match Uuid::parse_str(&id) {
-        Ok(service_id) => get_base_service_resource(state, service_id).await,
-        Err(_) => get_virtual_service_resource(state, &id).await,
+        Ok(service_id) => get_base_service_resource(state, service_id, &base).await,
+        Err(_) => get_virtual_service_resource(state, &id, &base).await,
     }
 }
 
@@ -166,6 +186,7 @@ async fn get_service_resource(
 async fn get_base_service_resource(
     state: AppState,
     service_id: Uuid,
+    base: &str,
 ) -> Result<Json<Value>, ApiError> {
     let service = state
         .catalog
@@ -200,19 +221,23 @@ async fn get_base_service_resource(
         "extent": extent,
         "attached_services": attached_services,
         "links": [
-            {"rel": "self", "href": format!("/services/{}", service.id), "method": "GET"},
-            {"rel": "tiles", "href": format!("/tiles/{{z}}/{{x}}/{{y}}?service_id={}", service.id), "method": "GET"},
-            {"rel": "stac-items", "href": "/stac/collections/mantle/items", "method": "GET"},
-            {"rel": "debug", "href": format!("/admin/services/{}/debug", service.id), "method": "GET", "auth": "admin"},
-            {"rel": "delete", "href": format!("/admin/services/{}/delete", service.id), "method": "POST", "auth": "admin"},
-            {"rel": "purge", "href": format!("/admin/services/{}/purge", service.id), "method": "POST", "auth": "admin"},
-            {"rel": "attach-service", "href": format!("/admin/services/{}/attach", service.id), "method": "POST", "auth": "admin"},
+            {"rel": "self", "href": format!("{base}/services/{}", service.id), "method": "GET"},
+            {"rel": "tiles", "href": format!("{base}/tiles/{{z}}/{{x}}/{{y}}?service_id={}", service.id), "method": "GET"},
+            {"rel": "stac-items", "href": format!("{base}/stac/collections/mantle/items"), "method": "GET"},
+            {"rel": "debug", "href": format!("{base}/admin/services/{}/debug", service.id), "method": "GET", "auth": "admin"},
+            {"rel": "delete", "href": format!("{base}/admin/services/{}/delete", service.id), "method": "POST", "auth": "admin"},
+            {"rel": "purge", "href": format!("{base}/admin/services/{}/purge", service.id), "method": "POST", "auth": "admin"},
+            {"rel": "attach-service", "href": format!("{base}/admin/services/{}/attach", service.id), "method": "POST", "auth": "admin"},
         ],
     })))
 }
 
 /// Attached/output virtual service resource, resolved by public URL slug.
-async fn get_virtual_service_resource(state: AppState, slug: &str) -> Result<Json<Value>, ApiError> {
+async fn get_virtual_service_resource(
+    state: AppState,
+    slug: &str,
+    base: &str,
+) -> Result<Json<Value>, ApiError> {
     let service = state
         .catalog
         .get_virtual_service_by_slug(slug)
@@ -258,9 +283,9 @@ async fn get_virtual_service_resource(state: AppState, slug: &str) -> Result<Jso
             "format": parent.format,
         },
         "links": [
-            {"rel": "self", "href": format!("/services/{}", service.slug)},
-            {"rel": "tiles", "href": format!("/services/{}/tiles/{{z}}/{{x}}/{{y}}", service.slug)},
-            {"rel": "ogc-tiles", "href": format!("/services/{}/ogc/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}", service.slug)},
+            {"rel": "self", "href": format!("{base}/services/{}", service.slug)},
+            {"rel": "tiles", "href": format!("{base}/services/{}/tiles/{{z}}/{{x}}/{{y}}", service.slug)},
+            {"rel": "ogc-tiles", "href": format!("{base}/services/{}/ogc/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}", service.slug)},
         ]
     })))
 }
@@ -290,8 +315,10 @@ async fn get_service_ogc_tile(
 
 async fn get_service_stac_items(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((slug, collection_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
+    let base = request_base_url(&headers);
     let service = state
         .catalog
         .get_virtual_service_by_slug(&slug)
@@ -329,8 +356,8 @@ async fn get_service_stac_items(
                 }
             },
             "links": [
-                {"rel": "parent", "href": format!("/stac/collections/{}", parent.id)},
-                {"rel": "self", "href": format!("/services/{}/stac/collections/{}/items", slug, slug)},
+                {"rel": "parent", "href": format!("{base}/stac/collections/{}", parent.id)},
+                {"rel": "self", "href": format!("{base}/services/{}/stac/collections/{}/items", slug, slug)},
             ]
         }]
     })))
