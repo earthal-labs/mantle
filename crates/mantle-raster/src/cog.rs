@@ -94,6 +94,19 @@ fn compute_wgs84_footprint(
         let lonlat = transformer
             .transform_coordinate(&Coordinate::new_2d(wx, wy))
             .ok()?;
+        // Sanity check: a genuine WGS84 corner must fall within valid lon/lat
+        // bounds. Some sources (notably USGS Albers-projected products like
+        // Landsat Collection 2 ARD/CU tiles) encode their projection as
+        // GeoTIFF "user-defined" rather than a plain EPSG reference; oxigdal's
+        // `epsg_code()` falls back to the geographic datum key in that case
+        // (e.g. 4326), which isn't the actual projected CRS. Transforming
+        // "EPSG:4326 -> EPSG:4326" is an identity pass-through, so the raw
+        // projected-meter coordinates come out looking like nonsense degrees
+        // (e.g. lon=-1215570). Reject rather than hand back a garbage
+        // footprint that draws as a huge, wrong rectangle on the map.
+        if !(-180.0..=180.0).contains(&lonlat.x) || !(-90.0..=90.0).contains(&lonlat.y) {
+            return None;
+        }
         ring.push([lonlat.x, lonlat.y]);
     }
     ring.push(ring[0]);
@@ -564,5 +577,25 @@ mod tests {
             pixel_height: -1.0,
         };
         assert!(compute_wgs84_footprint(&gt, 10, 10, 0).is_none());
+    }
+
+    #[test]
+    fn compute_wgs84_footprint_none_when_reported_epsg_is_actually_geographic_identity() {
+        // Mirrors a real Landsat Collection 2 CONUS/ARD tile: geo_transform
+        // is in Albers meters (pixel_width=30, origin in the millions), but
+        // oxigdal's epsg_code() fell back to reporting 4326 (the underlying
+        // geographic datum key) because the file's actual projection is
+        // GeoTIFF "user-defined" rather than a plain EPSG reference.
+        // "EPSG:4326 -> EPSG:4326" is an identity transform, so naively
+        // trusting it would hand back the raw meter values as bogus degrees.
+        let gt = oxigdal::core_types::types::GeoTransform {
+            origin_x: -1_215_570.0,
+            pixel_width: 30.0,
+            row_rotation: 0.0,
+            origin_y: 2_564_790.0,
+            col_rotation: 0.0,
+            pixel_height: -30.0,
+        };
+        assert!(compute_wgs84_footprint(&gt, 5000, 5000, 4326).is_none());
     }
 }
