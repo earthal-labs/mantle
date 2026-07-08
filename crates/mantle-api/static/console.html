@@ -610,7 +610,7 @@
           <tr><td>Dimensions</td><td>${extent.width} &times; ${extent.height} px</td></tr>
           <tr><td>Band Count</td><td>${extent.band_count}</td></tr>
           <tr><td>Pixel Type</td><td>${extent.data_type || 'unknown'}</td></tr>
-          <tr><td>Spatial Reference</td><td>EPSG:${extent.epsg_code ?? '?'}</td></tr>`
+          <tr><td>Spatial Reference</td><td class="wrap">${extent.epsg_code ? 'EPSG:' + extent.epsg_code : (extent.resolved_crs || '<em>unknown</em>')}</td></tr>`
         : `<tr><td>Extent</td><td><em>not available &mdash; CRS/geotransform not detected</em></td></tr>`;
       const scenes = data.scenes || [];
       const assetCount = scenes.reduce((n, s) => n + (s.assets ? s.assets.length : 0), 0);

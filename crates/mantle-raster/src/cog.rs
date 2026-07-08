@@ -19,7 +19,7 @@ use oxigdal::algorithms::vector::{Coordinate, CrsTransformer};
 use oxigdal::core_types::io::{ByteRange, DataSource};
 use oxigdal::core_types::types::RasterDataType;
 use oxigdal::geotiff::tiff::{Compression, TiffTag};
-use oxigdal::geotiff::{compression, CogReader};
+use oxigdal::geotiff::{compression, CogReader, GeoKey, GeoKeyDirectory};
 use rayon::prelude::*;
 use std::sync::Arc;
 use tracing::warn;
@@ -46,10 +46,11 @@ pub async fn debug_metadata(
             .geo_transform()
             .map_err(|e| RasterError::Cog(format!("read geo_transform: {e}")))?;
         let epsg_code = reader.epsg_code();
+        let resolved_crs = reader.geo_keys().and_then(resolve_source_crs);
 
-        let footprint_wgs84 = match (&geo_transform, epsg_code) {
-            (Some(gt), Some(epsg)) => {
-                compute_wgs84_footprint(gt, reader.width(), reader.height(), epsg)
+        let footprint_wgs84 = match (&geo_transform, &resolved_crs) {
+            (Some(gt), Some(crs)) => {
+                compute_wgs84_footprint(gt, reader.width(), reader.height(), crs)
             }
             _ => None,
         };
@@ -61,12 +62,154 @@ pub async fn debug_metadata(
             data_type: info.data_type().map(|d| format!("{d:?}")),
             tile_size: reader.tile_size(),
             epsg_code,
+            resolved_crs,
             geo_transform,
             footprint_wgs84,
         })
     })
     .await
     .map_err(|e| RasterError::Cog(format!("blocking task join: {e}")))?
+}
+
+/// Resolves the CRS to use for reprojection from a file's raw GeoKeys,
+/// handling the case `GeoKeyDirectory::epsg_code()` can't: a "user-defined"
+/// (GeoTIFF code 32767) projected CRS. Some producers — notably USGS Landsat
+/// Collection 2 ARD/CONUS products — encode their projection directly via
+/// GeoTIFF `Proj*` GeoKeys instead of referencing a registered EPSG code.
+/// `epsg_code()` silently falls back to the *geographic* datum key in that
+/// case (e.g. reporting 4326 — the datum, not the actual projected CRS),
+/// which produces an identity no-op transform and garbage output. Rather
+/// than special-case one known dataset, this reconstructs a PROJ4 string
+/// directly from the file's own raw projection parameters, covering the
+/// GeoTIFF `ProjCoordTrans` methods common to satellite imagery products —
+/// so it works for any file using this pattern, not just Landsat.
+fn resolve_source_crs(geo_keys: &GeoKeyDirectory) -> Option<String> {
+    // Plain EPSG reference — the common, fast case.
+    if let Some(epsg) = geo_keys.epsg_code() {
+        return Some(format!("EPSG:{epsg}"));
+    }
+
+    // Anything other than an explicit "user-defined" projected CRS marker
+    // isn't something we know how to reconstruct (e.g. a geographic-only
+    // file with no projection at all).
+    if geo_keys.get_short(GeoKey::ProjectedCsType) != Some(32767) {
+        return None;
+    }
+    let coord_trans = geo_keys.get_short(GeoKey::ProjCoordTrans)?;
+
+    let lat1 = geo_keys.get_double(GeoKey::ProjStdParallel1);
+    let lat2 = geo_keys.get_double(GeoKey::ProjStdParallel2);
+    let nat_origin_lat = geo_keys.get_double(GeoKey::ProjNatOriginLat);
+    let nat_origin_lon = geo_keys.get_double(GeoKey::ProjNatOriginLong);
+    let false_origin_lat = geo_keys.get_double(GeoKey::ProjFalseOriginLat);
+    let false_origin_lon = geo_keys.get_double(GeoKey::ProjFalseOriginLong);
+    let center_lat = geo_keys.get_double(GeoKey::ProjCenterLat);
+    let center_lon = geo_keys.get_double(GeoKey::ProjCenterLong);
+    let false_easting = geo_keys
+        .get_double(GeoKey::ProjFalseEasting)
+        .or_else(|| geo_keys.get_double(GeoKey::ProjFalseOriginEasting))
+        .unwrap_or(0.0);
+    let false_northing = geo_keys
+        .get_double(GeoKey::ProjFalseNorthing)
+        .or_else(|| geo_keys.get_double(GeoKey::ProjFalseOriginNorthing))
+        .unwrap_or(0.0);
+    let scale = geo_keys.get_double(GeoKey::ProjScaleAtNatOrigin).unwrap_or(1.0);
+
+    // GeoTIFF `CT_*` projection method codes (a subset of the spec covering
+    // the methods satellite imagery products actually use in practice).
+    let proj = match coord_trans {
+        11 => {
+            // CT_AlbersEqualArea — e.g. Landsat Collection 2 ARD/CONUS (EPSG:5070-like).
+            let lat0 = false_origin_lat.or(nat_origin_lat).unwrap_or(0.0);
+            let lon0 = false_origin_lon.or(nat_origin_lon).unwrap_or(0.0);
+            format!(
+                "+proj=aea +lat_1={} +lat_2={} +lat_0={lat0} +lon_0={lon0} +x_0={false_easting} +y_0={false_northing}",
+                lat1?, lat2?
+            )
+        }
+        8 => {
+            // CT_LambertConfConic_2SP
+            let lat0 = false_origin_lat.or(nat_origin_lat).unwrap_or(0.0);
+            let lon0 = false_origin_lon.or(nat_origin_lon).unwrap_or(0.0);
+            format!(
+                "+proj=lcc +lat_1={} +lat_2={} +lat_0={lat0} +lon_0={lon0} +x_0={false_easting} +y_0={false_northing}",
+                lat1?, lat2?
+            )
+        }
+        9 => {
+            // CT_LambertConfConic_Helmert (1SP)
+            let lat0 = nat_origin_lat?;
+            let lon0 = nat_origin_lon.unwrap_or(0.0);
+            format!(
+                "+proj=lcc +lat_1={lat0} +lat_0={lat0} +lon_0={lon0} +k_0={scale} +x_0={false_easting} +y_0={false_northing}"
+            )
+        }
+        1 => {
+            // CT_TransverseMercator
+            let lat0 = nat_origin_lat.unwrap_or(0.0);
+            let lon0 = nat_origin_lon?;
+            format!(
+                "+proj=tmerc +lat_0={lat0} +lon_0={lon0} +k={scale} +x_0={false_easting} +y_0={false_northing}"
+            )
+        }
+        7 => {
+            // CT_Mercator
+            let lat0 = nat_origin_lat.unwrap_or(0.0);
+            let lon0 = nat_origin_lon?;
+            format!("+proj=merc +lat_ts={lat0} +lon_0={lon0} +x_0={false_easting} +y_0={false_northing}")
+        }
+        10 => {
+            // CT_LambertAzimEqualArea
+            let lat0 = center_lat.or(nat_origin_lat)?;
+            let lon0 = center_lon.or(nat_origin_lon).unwrap_or(0.0);
+            format!("+proj=laea +lat_0={lat0} +lon_0={lon0} +x_0={false_easting} +y_0={false_northing}")
+        }
+        13 => {
+            // CT_EquidistantConic
+            let lat0 = false_origin_lat.or(nat_origin_lat).unwrap_or(0.0);
+            let lon0 = false_origin_lon.or(nat_origin_lon).unwrap_or(0.0);
+            let l1 = lat1?;
+            let l2 = lat2.unwrap_or(l1);
+            format!(
+                "+proj=eqdc +lat_1={l1} +lat_2={l2} +lat_0={lat0} +lon_0={lon0} +x_0={false_easting} +y_0={false_northing}"
+            )
+        }
+        15 => {
+            // CT_PolarStereographic
+            let lat0 = nat_origin_lat.unwrap_or(90.0);
+            let lon0 = nat_origin_lon.unwrap_or(0.0);
+            format!(
+                "+proj=stere +lat_0={lat0} +lat_ts={lat0} +lon_0={lon0} +k={scale} +x_0={false_easting} +y_0={false_northing}"
+            )
+        }
+        24 => {
+            // CT_Sinusoidal
+            let lon0 = nat_origin_lon.or(center_lon).unwrap_or(0.0);
+            format!("+proj=sinu +lon_0={lon0} +x_0={false_easting} +y_0={false_northing}")
+        }
+        other => {
+            warn!(
+                coord_trans = other,
+                "cog: user-defined projected CRS uses an unhandled projection method; cannot reproject"
+            );
+            return None;
+        }
+    };
+
+    // Ellipsoid: prefer the file's own semi-major axis / inverse flattening
+    // when present (keeps the derived CRS exact for non-WGS84/GRS80 datums);
+    // otherwise WGS84 is close enough for tile placement (GRS80 — the
+    // ellipsoid behind NAD83, by far the most common case here — differs
+    // from WGS84 by a fraction of a millimeter in semi-major axis).
+    let ellipsoid = match (
+        geo_keys.get_double(GeoKey::GeogSemiMajorAxis),
+        geo_keys.get_double(GeoKey::GeogInvFlattening),
+    ) {
+        (Some(a), Some(rf)) => format!("+a={a} +rf={rf}"),
+        _ => "+ellps=WGS84".to_string(),
+    };
+
+    Some(format!("{proj} {ellipsoid} +units=m +no_defs"))
 }
 
 /// Reprojects the service's four pixel-extent corners (upper-left,
@@ -78,9 +221,9 @@ fn compute_wgs84_footprint(
     geo_transform: &oxigdal::core_types::types::GeoTransform,
     width: u64,
     height: u64,
-    epsg: u32,
+    source_crs: &str,
 ) -> Option<Vec<[f64; 2]>> {
-    let transformer = CrsTransformer::new(format!("EPSG:{epsg}"), "EPSG:4326").ok()?;
+    let transformer = CrsTransformer::new(source_crs, "EPSG:4326").ok()?;
     let corners = [
         (0.0, 0.0),
         (width as f64, 0.0),
@@ -156,17 +299,17 @@ fn read_and_warp(
         return Ok(None);
     };
 
-    let Some(epsg) = reader.epsg_code() else {
+    let Some(source_crs) = reader.geo_keys().and_then(resolve_source_crs) else {
         warn!(
             width,
             height,
             ?geo_transform,
-            "cog: no EPSG code detected; cannot reproject tile"
+            "cog: no usable CRS detected; cannot reproject tile"
         );
         return Ok(None);
     };
 
-    let transformer = CrsTransformer::new("EPSG:3857", format!("EPSG:{epsg}"))
+    let transformer = CrsTransformer::new("EPSG:3857", &source_crs)
         .map_err(|e| RasterError::Cog(format!("build crs transformer: {e}")))?;
 
     // Corners of the requested Web Mercator tile, reprojected into the
@@ -187,7 +330,7 @@ fn read_and_warp(
         let native = match transformer.transform_coordinate(&Coordinate::new_2d(mx, my)) {
             Ok(n) => n,
             Err(e) => {
-                warn!(mx, my, epsg, error = %e, "cog: corner reprojection failed");
+                warn!(mx, my, source_crs = %source_crs, error = %e, "cog: corner reprojection failed");
                 continue;
             }
         };
@@ -226,7 +369,7 @@ fn read_and_warp(
             row_min,
             col_max,
             row_max,
-            epsg,
+            source_crs = %source_crs,
             "cog: computed source window is empty/degenerate for this tile"
         );
         return Ok(None);
@@ -554,7 +697,7 @@ mod tests {
             pixel_height: -10.0,
         };
 
-        let ring = compute_wgs84_footprint(&gt, 100, 100, 32633)
+        let ring = compute_wgs84_footprint(&gt, 100, 100, "EPSG:32633")
             .expect("footprint must reproject for a real UTM zone");
 
         assert_eq!(ring.len(), 5, "ring must close (first corner repeated last)");
@@ -576,7 +719,7 @@ mod tests {
             col_rotation: 0.0,
             pixel_height: -1.0,
         };
-        assert!(compute_wgs84_footprint(&gt, 10, 10, 0).is_none());
+        assert!(compute_wgs84_footprint(&gt, 10, 10, "EPSG:0").is_none());
     }
 
     #[test]
@@ -596,6 +739,141 @@ mod tests {
             col_rotation: 0.0,
             pixel_height: -30.0,
         };
-        assert!(compute_wgs84_footprint(&gt, 5000, 5000, 4326).is_none());
+        assert!(compute_wgs84_footprint(&gt, 5000, 5000, "EPSG:4326").is_none());
+    }
+
+    /// Builds a minimal `GeoKeyDirectory` for a "user-defined" projected CRS
+    /// using the raw Albers Equal Area parameters USGS Landsat Collection 2
+    /// ARD/CONUS products actually encode (NAD83 / Conus Albers, ~EPSG:5070),
+    /// mirroring what `oxigdal-geotiff` would parse from such a file's IFD.
+    fn albers_user_defined_geo_keys() -> GeoKeyDirectory {
+        use oxigdal::geotiff::geokeys::GeoKeyEntry;
+
+        let double_params = vec![29.5, 45.5, 23.0, -96.0, 0.0, 0.0];
+        GeoKeyDirectory {
+            version: 1,
+            key_revision_major: 1,
+            key_revision_minor: 0,
+            entries: vec![
+                GeoKeyEntry {
+                    key_id: GeoKey::ProjectedCsType as u16,
+                    tiff_tag_location: 0,
+                    count: 1,
+                    value_offset: 32767, // user-defined
+                },
+                GeoKeyEntry {
+                    key_id: GeoKey::ProjCoordTrans as u16,
+                    tiff_tag_location: 0,
+                    count: 1,
+                    value_offset: 11, // CT_AlbersEqualArea
+                },
+                GeoKeyEntry {
+                    key_id: GeoKey::ProjStdParallel1 as u16,
+                    tiff_tag_location: TiffTag::GeoDoubleParams as u16,
+                    count: 1,
+                    value_offset: 0,
+                },
+                GeoKeyEntry {
+                    key_id: GeoKey::ProjStdParallel2 as u16,
+                    tiff_tag_location: TiffTag::GeoDoubleParams as u16,
+                    count: 1,
+                    value_offset: 1,
+                },
+                GeoKeyEntry {
+                    key_id: GeoKey::ProjNatOriginLat as u16,
+                    tiff_tag_location: TiffTag::GeoDoubleParams as u16,
+                    count: 1,
+                    value_offset: 2,
+                },
+                GeoKeyEntry {
+                    key_id: GeoKey::ProjNatOriginLong as u16,
+                    tiff_tag_location: TiffTag::GeoDoubleParams as u16,
+                    count: 1,
+                    value_offset: 3,
+                },
+                GeoKeyEntry {
+                    key_id: GeoKey::ProjFalseEasting as u16,
+                    tiff_tag_location: TiffTag::GeoDoubleParams as u16,
+                    count: 1,
+                    value_offset: 4,
+                },
+                GeoKeyEntry {
+                    key_id: GeoKey::ProjFalseNorthing as u16,
+                    tiff_tag_location: TiffTag::GeoDoubleParams as u16,
+                    count: 1,
+                    value_offset: 5,
+                },
+            ],
+            double_params,
+            ascii_params: String::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_source_crs_builds_proj4_for_user_defined_albers() {
+        let geo_keys = albers_user_defined_geo_keys();
+        let crs = resolve_source_crs(&geo_keys).expect("must derive a PROJ4 string");
+        assert!(crs.starts_with("+proj=aea"), "unexpected CRS: {crs}");
+        assert!(crs.contains("+lat_1=29.5"));
+        assert!(crs.contains("+lat_2=45.5"));
+        assert!(crs.contains("+lon_0=-96"));
+    }
+
+    #[test]
+    fn resolve_source_crs_recovers_correct_landsat_footprint() {
+        // Same geo_transform as the "identity" rejection test above, but now
+        // paired with the real user-defined GeoKeys instead of a bare EPSG
+        // code — this must produce a real, plausible CONUS-area footprint
+        // instead of `None`.
+        let gt = oxigdal::core_types::types::GeoTransform {
+            origin_x: -1_215_570.0,
+            pixel_width: 30.0,
+            row_rotation: 0.0,
+            origin_y: 2_564_790.0,
+            col_rotation: 0.0,
+            pixel_height: -30.0,
+        };
+        let geo_keys = albers_user_defined_geo_keys();
+        let crs = resolve_source_crs(&geo_keys).expect("must derive a PROJ4 string");
+        let ring = compute_wgs84_footprint(&gt, 5000, 5000, &crs)
+            .expect("footprint must reproject using the derived Albers CRS");
+        for [lon, lat] in &ring {
+            assert!(
+                (-125.0..=-65.0).contains(lon),
+                "lon {lon} not within CONUS bounds"
+            );
+            assert!(
+                (24.0..=50.0).contains(lat),
+                "lat {lat} not within CONUS bounds"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_source_crs_none_for_unhandled_projection_method() {
+        use oxigdal::geotiff::geokeys::GeoKeyEntry;
+
+        let geo_keys = GeoKeyDirectory {
+            version: 1,
+            key_revision_major: 1,
+            key_revision_minor: 0,
+            entries: vec![
+                GeoKeyEntry {
+                    key_id: GeoKey::ProjectedCsType as u16,
+                    tiff_tag_location: 0,
+                    count: 1,
+                    value_offset: 32767,
+                },
+                GeoKeyEntry {
+                    key_id: GeoKey::ProjCoordTrans as u16,
+                    tiff_tag_location: 0,
+                    count: 1,
+                    value_offset: 99, // not a method we handle
+                },
+            ],
+            double_params: Vec::new(),
+            ascii_params: String::new(),
+        };
+        assert!(resolve_source_crs(&geo_keys).is_none());
     }
 }

@@ -34,6 +34,12 @@ pub struct CogDebugInfo {
     pub data_type: Option<String>,
     pub tile_size: Option<(u32, u32)>,
     pub epsg_code: Option<u32>,
+    /// The CRS actually used for reprojection — an `EPSG:<code>` string when
+    /// the file references a registered code, or a PROJ4 definition string
+    /// reconstructed from the raw GeoTIFF Proj* GeoKeys when the file
+    /// declares a "user-defined" (non-EPSG) projected CRS, which `epsg_code`
+    /// above cannot represent. `None` if neither could be resolved.
+    pub resolved_crs: Option<String>,
     pub geo_transform: Option<GeoTransform>,
     /// The service's pixel extent reprojected to EPSG:4326, as a closed
     /// ring of `[lon, lat]` corners (NW, NE, SE, SW, NW) — lets clients
