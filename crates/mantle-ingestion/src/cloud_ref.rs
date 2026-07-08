@@ -82,12 +82,14 @@ pub(crate) async fn register_cloud_reference(
     request: CloudReferenceRequest,
 ) -> Result<Uuid, IngestionError> {
     let validated = validate_storage_uri(&request.storage_uri)?;
-    let id = Uuid::new_v4();
+    let service_id = Uuid::new_v4();
+    let scene_id = Uuid::new_v4();
+    let asset_id = Uuid::new_v4();
     let now = chrono::Utc::now();
 
     let (format, storage_uri, spatial) = match validated.format {
         ReferenceFormat::NetCdf | ReferenceFormat::Hdf5 => {
-            let target = icechunk_repo_uri(&service.storage.bucket, id);
+            let target = icechunk_repo_uri(&service.storage.bucket, service_id);
             let response = virtualize_to_icechunk(VirtualizeRequest {
                 name: request.name.clone(),
                 source_uri: validated.raw.clone(),
@@ -112,19 +114,38 @@ pub(crate) async fn register_cloud_reference(
         }
     };
 
-    let record = mantle_catalog::ServiceRecord {
-        id,
-        name: request.name,
-        description: request.description,
+    service
+        .catalog
+        .create_service(mantle_catalog::ServiceRecord {
+            id: service_id,
+            name: request.name,
+            description: request.description,
+            format,
+            created_at: now,
+        })
+        .await?;
+
+    let asset = mantle_catalog::AssetRecord {
+        id: asset_id,
+        service_id,
+        scene_id,
+        band_role: "data".into(),
+        band_index: 1,
         format,
         storage_uri,
         crs: spatial.crs.clone(),
-        temporal_start: None,
-        temporal_end: None,
+        created_at: now,
+    };
+    let scene = mantle_catalog::SceneRecord {
+        id: scene_id,
+        service_id,
+        label: None,
+        acquired_at: None,
         created_at: now,
     };
     let footprint = mantle_catalog::FootprintRecord {
-        service_id: id,
+        scene_id,
+        service_id,
         geometry_wkt: spatial.geometry_wkt,
         cloud_cover: None,
         partition_key: String::new(),
@@ -132,10 +153,9 @@ pub(crate) async fn register_cloud_reference(
 
     service
         .catalog
-        .insert_footprint(record, footprint)
-        .await
-        .map_err(IngestionError::from)?;
+        .add_scene(scene, vec![asset], footprint)
+        .await?;
 
-    info!(service_id = %id, format = ?format, "registered cloud reference");
-    Ok(id)
+    info!(%service_id, format = ?format, "registered cloud reference");
+    Ok(service_id)
 }

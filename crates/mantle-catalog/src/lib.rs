@@ -1,15 +1,23 @@
 //! DuckLake + Postgres catalog client.
 //!
+//! # Hierarchy
+//!
+//! A service is a pure container (e.g. "Landsat 9 Collection 2"). Each service has
+//! one or more scenes — one spatiotemporal acquisition, the STAC Item equivalent.
+//! Each scene has one or more assets — the actual raster files, one band each, the
+//! STAC Asset equivalent. A plain single-file upload is the degenerate case: one
+//! scene, one asset.
+//!
 //! # Append-only catalog
 //!
-//! Mantle never updates catalog metadata in place. Each footprint insert writes a new
+//! Mantle never updates catalog metadata in place. Each scene insert writes a new
 //! GeoParquet V2 object and registers it as a new DuckLake snapshot; Postgres rows are
 //! insert-only (enforced by [`migrations/002_append_only_notify.sql`](../../migrations/002_append_only_notify.sql)).
 //!
 //! # Partition strategy
 //!
 //! Footprint Parquet files are partitioned by **acquisition month** (`YYYY-MM`), derived
-//! from the service `temporal_start` (or the insert time when absent). Paths look like:
+//! from the scene's `acquired_at` (or the insert time when absent). Paths look like:
 //!
 //! ```text
 //! {ducklake_data_path}partitions/2024-07/{uuid}.parquet
@@ -37,12 +45,14 @@ pub use services::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use geo_types::Rect;
-use mantle_arrow::{ServiceFormat, ServiceRef};
+use mantle_arrow::{AssetRef, SceneRef, ServiceFormat};
 use mantle_config::CatalogConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// A service container — name/description shell, nothing file-specific. All
+/// raster content lives in its scenes/assets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceRecord {
     pub id: Uuid,
@@ -50,31 +60,59 @@ pub struct ServiceRecord {
     #[serde(default)]
     pub description: Option<String>,
     pub format: ServiceFormat,
-    pub storage_uri: String,
-    pub crs: Option<String>,
-    pub temporal_start: Option<DateTime<Utc>>,
-    pub temporal_end: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
-impl ServiceRecord {
-    pub fn to_service_ref(&self) -> ServiceRef {
-        ServiceRef {
+/// One spatiotemporal acquisition within a service (the STAC Item equivalent).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SceneRecord {
+    pub id: Uuid,
+    pub service_id: Uuid,
+    pub label: Option<String>,
+    pub acquired_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One band file within a scene (the STAC Asset equivalent).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetRecord {
+    pub id: Uuid,
+    pub service_id: Uuid,
+    pub scene_id: Uuid,
+    pub band_role: String,
+    pub band_index: u32,
+    pub format: ServiceFormat,
+    pub storage_uri: String,
+    pub crs: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl AssetRecord {
+    pub fn to_asset_ref(&self) -> AssetRef {
+        AssetRef {
             id: self.id,
-            name: self.name.clone(),
+            band_role: self.band_role.clone(),
+            band_index: self.band_index,
             format: self.format,
             storage_uri: self.storage_uri.clone(),
             crs: self.crs.clone(),
-            // ServiceRecord doesn't carry footprint geometry (that lives in
-            // FootprintRecord/the DuckLake-backed table) — only spatial_query
-            // populates this field.
-            geometry_wkt: None,
         }
     }
 }
 
+/// A scene with its full asset list and spatial metadata — the shape
+/// returned by `list_scenes`/`get_scene`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SceneWithAssets {
+    pub scene: SceneRecord,
+    pub assets: Vec<AssetRecord>,
+    pub geometry_wkt: Option<String>,
+    pub cloud_cover: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FootprintRecord {
+    pub scene_id: Uuid,
     pub service_id: Uuid,
     pub geometry_wkt: String,
     pub cloud_cover: Option<f64>,
@@ -91,6 +129,15 @@ pub struct DeletionRecord {
     pub purge_eligible_at: DateTime<Utc>,
 }
 
+/// Same shape as [`DeletionRecord`], one level down — a single scene can be
+/// soft-deleted/purged without touching the rest of its service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SceneDeletionRecord {
+    pub scene_id: Uuid,
+    pub deleted_at: DateTime<Utc>,
+    pub purge_eligible_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SpatialQuery {
     pub bbox: Option<Rect<f64>>,
@@ -101,15 +148,40 @@ pub struct SpatialQuery {
 
 #[async_trait]
 pub trait CatalogClient: Send + Sync {
-    async fn insert_footprint(
+    /// Create a new service container (no scene/asset yet).
+    async fn create_service(&self, service: ServiceRecord) -> Result<Uuid, CatalogError>;
+
+    /// Add a new scene (one or more band assets + one footprint) to an
+    /// existing service. One Postgres tx + one DuckLake Parquet append.
+    async fn add_scene(
         &self,
-        service: ServiceRecord,
+        scene: SceneRecord,
+        assets: Vec<AssetRecord>,
         footprint: FootprintRecord,
     ) -> Result<Uuid, CatalogError>;
 
-    async fn spatial_query(&self, query: SpatialQuery) -> Result<Vec<ServiceRef>, CatalogError>;
+    async fn spatial_query(&self, query: SpatialQuery) -> Result<Vec<SceneRef>, CatalogError>;
 
     async fn get_service(&self, id: Uuid) -> Result<ServiceRecord, CatalogError>;
+
+    /// List every (non-deleted) scene for a service, each with its full asset list.
+    async fn list_scenes(&self, service_id: Uuid) -> Result<Vec<SceneWithAssets>, CatalogError>;
+
+    /// Fetch one scene with its full asset list.
+    async fn get_scene(&self, scene_id: Uuid) -> Result<SceneWithAssets, CatalogError>;
+
+    /// Hide one scene from every read path immediately, without affecting
+    /// the rest of its service. Idempotent.
+    async fn delete_scene(
+        &self,
+        scene_id: Uuid,
+        reason: Option<String>,
+    ) -> Result<SceneDeletionRecord, CatalogError>;
+
+    /// Physically remove a soft-deleted scene's catalog rows (Postgres +
+    /// DuckLake). Does **not** delete its assets' S3 objects — the caller
+    /// does that first. Idempotent.
+    async fn purge_scene(&self, scene_id: Uuid) -> Result<(), CatalogError>;
 
     /// Attach an on-the-fly raster function to an existing service (virtual service).
     async fn attach_function(
@@ -133,7 +205,11 @@ pub trait CatalogClient: Send + Sync {
         service_id: Option<Uuid>,
     ) -> Result<Vec<VirtualServiceRecord>, CatalogError>;
 
-    /// Register a pRPM output as a new virtual service + service.
+    /// Register a pRPM output as a new virtual service + service container.
+    /// Note: does not currently register a scene/asset for the output's own
+    /// raster data — nothing calls this yet (see `crates/mantle-api` job
+    /// completion handling, not yet wired), so that's deferred until a real
+    /// caller exists rather than speculatively built now.
     async fn register_output_service(
         &self,
         output_service: ServiceRecord,
@@ -141,11 +217,11 @@ pub trait CatalogClient: Send + Sync {
         endpoint_slug: String,
     ) -> Result<VirtualServiceRecord, CatalogError>;
 
-    /// Hide a service (and any virtual services attached to or produced from
-    /// it) from every read path immediately. The underlying rows/files are
-    /// physically removed later by the purge job, or immediately via the
-    /// admin purge-now override. Idempotent: calling it again on an
-    /// already-deleted service returns the original `deleted_at`.
+    /// Hide a service (and every scene/virtual service belonging to or
+    /// attached to it) from every read path immediately. The underlying
+    /// rows/files are physically removed later by the purge job, or
+    /// immediately via the admin purge-now override. Idempotent: calling it
+    /// again on an already-deleted service returns the original `deleted_at`.
     async fn soft_delete_service(
         &self,
         service_id: Uuid,
@@ -154,51 +230,100 @@ pub trait CatalogClient: Send + Sync {
 
     /// Like [`CatalogClient::get_service`] but ignores the soft-delete
     /// tombstone. Used only by purge orchestration (scheduled job / immediate
-    /// override), which needs `storage_uri` for an already-hidden service in
-    /// order to reclaim its S3 object.
+    /// override).
     async fn get_service_any(&self, id: Uuid) -> Result<ServiceRecord, CatalogError>;
 
     /// Physically remove a soft-deleted service's catalog rows (Postgres +
-    /// DuckLake) and mark its tombstone `purged_at`. Does **not** delete the
-    /// S3 object — the caller does that (via `get_service_any`'s
-    /// `storage_uri`) before calling this, since object storage access isn't
-    /// a catalog-crate concern. Idempotent: safe to call again on a service
-    /// that's already fully purged.
+    /// DuckLake), including every scene/asset it owns, and mark its
+    /// tombstone `purged_at`. Does **not** delete S3 objects — the caller
+    /// does that (looping over every scene/asset via `list_scenes`) before
+    /// calling this, since object storage access isn't a catalog-crate
+    /// concern. Idempotent: safe to call again on a service that's already
+    /// fully purged.
     async fn purge_service(&self, service_id: Uuid) -> Result<(), CatalogError>;
+
+    /// Convenience: resolve a service to one representative `ServiceRef` —
+    /// its most-recently-created scene's default asset (`band_role ==
+    /// "data"` if present, else the first asset by creation order). For the
+    /// common single-asset case this *is* the file; for a multi-asset scene
+    /// it's a reasonable single-file stand-in for code paths that only ever
+    /// needed one raster reference per service (debug metadata, the legacy
+    /// `/tiles?service_id=` route, EDR/process job dispatch) and haven't
+    /// been generalized to real multi-asset rendering.
+    async fn default_service_ref(
+        &self,
+        service_id: Uuid,
+    ) -> Result<mantle_arrow::ServiceRef, CatalogError> {
+        let service = self.get_service(service_id).await?;
+        let scenes = self.list_scenes(service_id).await?;
+        let scene = scenes.into_iter().next().ok_or(CatalogError::NotFound(service_id))?;
+        let asset = scene
+            .assets
+            .iter()
+            .find(|a| a.band_role == "data")
+            .or_else(|| scene.assets.first())
+            .ok_or(CatalogError::NotFound(service_id))?;
+        Ok(mantle_arrow::ServiceRef {
+            id: asset.id,
+            name: service.name,
+            format: asset.format,
+            storage_uri: asset.storage_uri.clone(),
+            crs: asset.crs.clone(),
+            geometry_wkt: scene.geometry_wkt.clone(),
+        })
+    }
 }
 
 /// Stub catalog client — returns empty results when Postgres/DuckLake are unavailable.
 pub struct StubCatalogClient {
     _config: Arc<CatalogConfig>,
-    services: std::sync::Mutex<std::collections::HashMap<String, VirtualServiceRecord>>,
+    virtual_services: std::sync::Mutex<std::collections::HashMap<String, VirtualServiceRecord>>,
     base_services: std::sync::Mutex<std::collections::HashMap<Uuid, ServiceRecord>>,
+    scenes: std::sync::Mutex<std::collections::HashMap<Uuid, SceneWithAssets>>,
 }
 
 impl StubCatalogClient {
     pub fn new(config: Arc<CatalogConfig>) -> Self {
         Self {
             _config: config,
-            services: std::sync::Mutex::new(std::collections::HashMap::new()),
+            virtual_services: std::sync::Mutex::new(std::collections::HashMap::new()),
             base_services: std::sync::Mutex::new(std::collections::HashMap::new()),
+            scenes: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 }
 
 #[async_trait]
 impl CatalogClient for StubCatalogClient {
-    async fn insert_footprint(
-        &self,
-        service: ServiceRecord,
-        _footprint: FootprintRecord,
-    ) -> Result<Uuid, CatalogError> {
+    async fn create_service(&self, service: ServiceRecord) -> Result<Uuid, CatalogError> {
+        let id = service.id;
         self.base_services
             .lock()
             .expect("stub services lock")
-            .insert(service.id, service.clone());
-        Ok(service.id)
+            .insert(id, service);
+        Ok(id)
     }
 
-    async fn spatial_query(&self, _query: SpatialQuery) -> Result<Vec<ServiceRef>, CatalogError> {
+    async fn add_scene(
+        &self,
+        scene: SceneRecord,
+        assets: Vec<AssetRecord>,
+        footprint: FootprintRecord,
+    ) -> Result<Uuid, CatalogError> {
+        let id = scene.id;
+        self.scenes.lock().expect("stub scenes lock").insert(
+            id,
+            SceneWithAssets {
+                scene,
+                assets,
+                geometry_wkt: Some(footprint.geometry_wkt),
+                cloud_cover: footprint.cloud_cover,
+            },
+        );
+        Ok(id)
+    }
+
+    async fn spatial_query(&self, _query: SpatialQuery) -> Result<Vec<SceneRef>, CatalogError> {
         Ok(Vec::new())
     }
 
@@ -211,6 +336,46 @@ impl CatalogClient for StubCatalogClient {
             .ok_or(CatalogError::NotFound(id))
     }
 
+    async fn list_scenes(&self, service_id: Uuid) -> Result<Vec<SceneWithAssets>, CatalogError> {
+        Ok(self
+            .scenes
+            .lock()
+            .expect("stub scenes lock")
+            .values()
+            .filter(|s| s.scene.service_id == service_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn get_scene(&self, scene_id: Uuid) -> Result<SceneWithAssets, CatalogError> {
+        self.scenes
+            .lock()
+            .expect("stub scenes lock")
+            .get(&scene_id)
+            .cloned()
+            .ok_or(CatalogError::NotFound(scene_id))
+    }
+
+    async fn delete_scene(
+        &self,
+        scene_id: Uuid,
+        _reason: Option<String>,
+    ) -> Result<SceneDeletionRecord, CatalogError> {
+        let deleted_at = Utc::now();
+        let purge_eligible_at =
+            deleted_at + chrono::Duration::days(self._config.purge_retention_days as i64);
+        Ok(SceneDeletionRecord {
+            scene_id,
+            deleted_at,
+            purge_eligible_at,
+        })
+    }
+
+    async fn purge_scene(&self, scene_id: Uuid) -> Result<(), CatalogError> {
+        self.scenes.lock().expect("stub scenes lock").remove(&scene_id);
+        Ok(())
+    }
+
     async fn attach_function(
         &self,
         service_id: Uuid,
@@ -220,8 +385,8 @@ impl CatalogClient for StubCatalogClient {
     ) -> Result<VirtualServiceRecord, CatalogError> {
         let service = self.get_service(service_id).await?;
         let slug = generate_service_slug(service_id, &function_id, endpoint_slug.as_deref());
-        let mut services = self.services.lock().expect("stub services lock");
-        if services.contains_key(&slug) {
+        let mut virtual_services = self.virtual_services.lock().expect("stub services lock");
+        if virtual_services.contains_key(&slug) {
             return Err(CatalogError::DuplicateSlug(slug));
         }
         let record = VirtualServiceRecord {
@@ -234,7 +399,7 @@ impl CatalogClient for StubCatalogClient {
             params_defaults,
             created_at: Utc::now(),
         };
-        services.insert(slug, record.clone());
+        virtual_services.insert(slug, record.clone());
         Ok(record)
     }
 
@@ -243,7 +408,7 @@ impl CatalogClient for StubCatalogClient {
         slug: &str,
     ) -> Result<VirtualServiceRecord, CatalogError> {
         let normalized = sanitize_slug(slug);
-        self.services
+        self.virtual_services
             .lock()
             .expect("stub services lock")
             .get(&normalized)
@@ -256,7 +421,7 @@ impl CatalogClient for StubCatalogClient {
         service_id: Option<Uuid>,
     ) -> Result<Vec<VirtualServiceRecord>, CatalogError> {
         Ok(self
-            .services
+            .virtual_services
             .lock()
             .expect("stub services lock")
             .values()
@@ -275,8 +440,8 @@ impl CatalogClient for StubCatalogClient {
         endpoint_slug: String,
     ) -> Result<VirtualServiceRecord, CatalogError> {
         let slug = sanitize_slug(&endpoint_slug);
-        let mut services = self.services.lock().expect("stub services lock");
-        if services.contains_key(&slug) {
+        let mut virtual_services = self.virtual_services.lock().expect("stub services lock");
+        if virtual_services.contains_key(&slug) {
             return Err(CatalogError::DuplicateSlug(slug));
         }
         self.base_services
@@ -293,7 +458,7 @@ impl CatalogClient for StubCatalogClient {
             params_defaults: serde_json::json!({}),
             created_at: Utc::now(),
         };
-        services.insert(slug, record.clone());
+        virtual_services.insert(slug, record.clone());
         Ok(record)
     }
 
@@ -327,6 +492,10 @@ impl CatalogClient for StubCatalogClient {
             .lock()
             .expect("stub services lock")
             .remove(&service_id);
+        self.scenes
+            .lock()
+            .expect("stub scenes lock")
+            .retain(|_, s| s.scene.service_id != service_id);
         Ok(())
     }
 }
@@ -336,22 +505,69 @@ mod tests {
     use super::*;
     use geo_types::coord;
 
-    #[test]
-    fn service_record_to_ref() {
-        let record = ServiceRecord {
-            id: Uuid::nil(),
-            name: "test".into(),
-            description: None,
-            format: ServiceFormat::Cog,
-            storage_uri: "s3://bucket/key".into(),
-            crs: Some("EPSG:4326".into()),
-            temporal_start: None,
-            temporal_end: None,
-            created_at: Utc::now(),
-        };
-        let reference = record.to_service_ref();
-        assert_eq!(reference.name, "test");
-        assert_eq!(reference.format, ServiceFormat::Cog);
+    #[tokio::test]
+    async fn stub_add_scene_and_list_scenes_round_trip() {
+        let config = Arc::new(CatalogConfig {
+            postgres_url: "postgres://localhost/mantle".into(),
+            ducklake_data_path: "s3://mantle-data/catalog/".into(),
+            geometry_column: "footprint".into(),
+            purge_retention_days: 7,
+            purge_poll_interval_seconds: 3600,
+        });
+        let catalog = StubCatalogClient::new(config);
+
+        let service_id = Uuid::new_v4();
+        catalog
+            .create_service(ServiceRecord {
+                id: service_id,
+                name: "landsat".into(),
+                description: None,
+                format: ServiceFormat::Cog,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create_service");
+
+        let scene_id = Uuid::new_v4();
+        let asset_id = Uuid::new_v4();
+        catalog
+            .add_scene(
+                SceneRecord {
+                    id: scene_id,
+                    service_id,
+                    label: Some("2026-06-05".into()),
+                    acquired_at: Some(Utc::now()),
+                    created_at: Utc::now(),
+                },
+                vec![AssetRecord {
+                    id: asset_id,
+                    service_id,
+                    scene_id,
+                    band_role: "red".into(),
+                    band_index: 1,
+                    format: ServiceFormat::Cog,
+                    storage_uri: "s3://bucket/B4.tif".into(),
+                    crs: Some("EPSG:32611".into()),
+                    created_at: Utc::now(),
+                }],
+                FootprintRecord {
+                    scene_id,
+                    service_id,
+                    geometry_wkt: "POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))".into(),
+                    cloud_cover: Some(5.0),
+                    partition_key: String::new(),
+                },
+            )
+            .await
+            .expect("add_scene");
+
+        let scenes = catalog.list_scenes(service_id).await.expect("list_scenes");
+        assert_eq!(scenes.len(), 1);
+        assert_eq!(scenes[0].assets.len(), 1);
+        assert_eq!(scenes[0].assets[0].band_role, "red");
+
+        let fetched = catalog.get_scene(scene_id).await.expect("get_scene");
+        assert_eq!(fetched.scene.id, scene_id);
     }
 
     #[tokio::test]
@@ -368,32 +584,53 @@ mod tests {
         });
 
         let catalog = PostgresDuckLakeCatalog::connect(config).await.expect("connect");
-        let id = Uuid::new_v4();
+        let service_id = Uuid::new_v4();
         let now = Utc::now();
-        let service = ServiceRecord {
-            id,
-            name: "integration-test".into(),
-            description: Some("integration test service".into()),
-            format: ServiceFormat::Cog,
-            storage_uri: "s3://mantle-data/test.tif".into(),
-            crs: Some("EPSG:4326".into()),
-            temporal_start: Some(now),
-            temporal_end: None,
-            created_at: now,
-        };
-        let footprint = FootprintRecord {
-            service_id: id,
-            geometry_wkt: "POLYGON((-1 -1, -1 1, 1 1, 1 -1, -1 -1))".into(),
-            cloud_cover: Some(10.0),
-            partition_key: String::new(),
-        };
-
         catalog
-            .insert_footprint(service.clone(), footprint)
+            .create_service(ServiceRecord {
+                id: service_id,
+                name: "integration-test".into(),
+                description: Some("integration test service".into()),
+                format: ServiceFormat::Cog,
+                created_at: now,
+            })
             .await
-            .expect("insert");
+            .expect("create_service");
 
-        let fetched = catalog.get_service(id).await.expect("get");
+        let scene_id = Uuid::new_v4();
+        let asset_id = Uuid::new_v4();
+        catalog
+            .add_scene(
+                SceneRecord {
+                    id: scene_id,
+                    service_id,
+                    label: None,
+                    acquired_at: Some(now),
+                    created_at: now,
+                },
+                vec![AssetRecord {
+                    id: asset_id,
+                    service_id,
+                    scene_id,
+                    band_role: "data".into(),
+                    band_index: 1,
+                    format: ServiceFormat::Cog,
+                    storage_uri: "s3://mantle-data/test.tif".into(),
+                    crs: Some("EPSG:4326".into()),
+                    created_at: now,
+                }],
+                FootprintRecord {
+                    scene_id,
+                    service_id,
+                    geometry_wkt: "POLYGON((-1 -1, -1 1, 1 1, 1 -1, -1 -1))".into(),
+                    cloud_cover: Some(10.0),
+                    partition_key: String::new(),
+                },
+            )
+            .await
+            .expect("add_scene");
+
+        let fetched = catalog.get_service(service_id).await.expect("get");
         assert_eq!(fetched.name, "integration-test");
 
         let hits = catalog
@@ -406,6 +643,6 @@ mod tests {
             })
             .await
             .expect("spatial");
-        assert!(hits.iter().any(|hit| hit.id == id));
+        assert!(hits.iter().any(|hit| hit.scene_id == scene_id));
     }
 }

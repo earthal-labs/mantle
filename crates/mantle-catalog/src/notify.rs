@@ -11,6 +11,7 @@ pub const FOOTPRINT_INSERT_CHANNEL: &str = "mantle_footprint_insert";
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct FootprintInsertEvent {
     pub footprint_id: i64,
+    pub scene_id: Uuid,
     pub service_id: Uuid,
     pub partition_key: String,
 }
@@ -34,7 +35,7 @@ mod tests {
 
     #[test]
     fn parse_notify_payload() {
-        let payload = r#"{"footprint_id":42,"service_id":"550e8400-e29b-41d4-a716-446655440000","partition_key":"2024-07"}"#;
+        let payload = r#"{"footprint_id":42,"scene_id":"660e8400-e29b-41d4-a716-446655440000","service_id":"550e8400-e29b-41d4-a716-446655440000","partition_key":"2024-07"}"#;
         let event = parse_footprint_insert_event(payload).expect("parse");
         assert_eq!(event.footprint_id, 42);
         assert_eq!(event.partition_key, "2024-07");

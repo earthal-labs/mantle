@@ -1,5 +1,6 @@
 //! Grayscale, pseudocolor, and user LUT colormap application.
 
+use crate::mosaic::TileLayer;
 use serde::Deserialize;
 
 /// Colormap applied to a single-band scalar tile before RGBA encode.
@@ -208,6 +209,49 @@ pub fn normalize_band(values: &[f32]) -> Vec<f32> {
         .collect()
 }
 
+/// Composite up to three single-band tile layers into an RGBA8 tile, one
+/// channel per named layer (`"r"`/`"g"`/`"b"`, case-insensitive). Each
+/// channel is independently min/max-normalized (same as single-band
+/// colormap rendering) before scaling to a byte. A missing channel renders
+/// as 0; alpha is 255 wherever any channel has a finite value at that
+/// pixel, else 0 (matches `apply_colormap`'s NaN-is-transparent convention).
+pub fn compose_rgb(channels: &[(String, TileLayer)]) -> Vec<u8> {
+    let pixel_count = channels.first().map(|(_, l)| l.values.len()).unwrap_or(0);
+    let channel = |name: &str| -> Vec<f32> {
+        channels
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, l)| normalize_band(&l.values))
+            .unwrap_or_else(|| vec![0.0; pixel_count])
+    };
+    let r = channel("r");
+    let g = channel("g");
+    let b = channel("b");
+
+    let to_byte = |v: f32| {
+        if v.is_finite() {
+            (v.clamp(0.0, 1.0) * 255.0).round() as u8
+        } else {
+            0
+        }
+    };
+
+    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    for i in 0..pixel_count {
+        let (rv, gv, bv) = (
+            r.get(i).copied().unwrap_or(0.0),
+            g.get(i).copied().unwrap_or(0.0),
+            b.get(i).copied().unwrap_or(0.0),
+        );
+        let any_finite = rv.is_finite() || gv.is_finite() || bv.is_finite();
+        rgba.push(to_byte(rv));
+        rgba.push(to_byte(gv));
+        rgba.push(to_byte(bv));
+        rgba.push(if any_finite { 255 } else { 0 });
+    }
+    rgba
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +290,37 @@ mod tests {
     fn nan_values_are_transparent() {
         let rgba = apply_colormap(&[f32::NAN], &Colormap::Grayscale);
         assert_eq!(&rgba[0..4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn compose_rgb_interleaves_named_channels() {
+        // Two pixels per channel so normalize_band has real min/max to work
+        // with (a single-pixel band always normalizes to 0 — min == max).
+        let layer = |values: Vec<f32>| TileLayer {
+            values,
+            width: 2,
+            height: 1,
+        };
+        let channels = vec![
+            ("r".to_string(), layer(vec![0.0, 10.0])),
+            ("g".to_string(), layer(vec![0.0, 20.0])),
+            ("b".to_string(), layer(vec![0.0, 0.0])),
+        ];
+        let rgba = compose_rgb(&channels);
+        assert_eq!(&rgba[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&rgba[4..8], &[255, 255, 0, 255]);
+    }
+
+    #[test]
+    fn compose_rgb_missing_channel_defaults_to_zero() {
+        let layer = TileLayer {
+            values: vec![0.0, 5.0],
+            width: 2,
+            height: 1,
+        };
+        let channels = vec![("r".to_string(), layer)];
+        let rgba = compose_rgb(&channels);
+        assert_eq!(&rgba[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&rgba[4..8], &[255, 0, 0, 255]);
     }
 }

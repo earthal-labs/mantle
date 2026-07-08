@@ -1,20 +1,14 @@
 //! Pathway A upload orchestration (stream → S3 → catalog).
 
 use crate::metadata::harvest_from_bytes;
-use crate::storage::{
-    build_object_store, service_object_key, storage_uri, upload_stream_with_header_peek,
-};
-use crate::{IngestionError, UploadRequest};
+use crate::storage::build_object_store;
+use crate::{AddSceneRequest, AddSceneResponse, IngestionError, UploadedAsset};
 use async_trait::async_trait;
-use bytes::Bytes;
-use futures_util::Stream;
 use mantle_arrow::ServiceFormat;
-use mantle_catalog::{CatalogClient, FootprintRecord, ServiceRecord};
+use mantle_catalog::{AssetRecord, CatalogClient, FootprintRecord, SceneRecord, ServiceRecord};
 use mantle_config::{AnalyticsConfig, StorageConfig};
 use object_store::ObjectStore;
 use std::sync::Arc;
-use tracing::info;
-use uuid::Uuid;
 
 /// Production ingestion service backed by S3 + catalog.
 pub struct MantleIngestionService {
@@ -38,106 +32,85 @@ impl MantleIngestionService {
             store,
         })
     }
-
-    /// Stream body chunks to S3, harvest metadata, register footprint in catalog.
-    pub async fn upload_from_stream<S>(
-        &self,
-        request: UploadRequest,
-        stream: S,
-    ) -> Result<Uuid, IngestionError>
-    where
-        S: Stream<Item = Result<Bytes, IngestionError>> + Send + Unpin,
-    {
-        let id = Uuid::new_v4();
-        let filename = request
-            .filename
-            .clone()
-            .unwrap_or_else(|| format!("{id}.tif"));
-        let key = service_object_key(id, &filename);
-        let uri = storage_uri(&self.storage.bucket, &key);
-
-        let (uploaded_bytes, header_peek) =
-            upload_stream_with_header_peek(self.store.clone(), &key, stream).await?;
-        info!(service_id = %id, key = %key, bytes = uploaded_bytes, "uploaded service to S3");
-
-        self.register_uploaded_service_with_id(request, uri, header_peek, id)
-            .await
-    }
-
-    /// Register a service whose bytes are already stored at `storage_uri`.
-    pub async fn register_uploaded_service_with_id(
-        &self,
-        request: UploadRequest,
-        storage_uri: String,
-        header_peek: Vec<u8>,
-        service_id: Uuid,
-    ) -> Result<Uuid, IngestionError> {
-        let spatial = harvest_from_bytes(&header_peek, &request.content_type)?;
-        insert_catalog_record(
-            self.catalog.as_ref(),
-            service_id,
-            request.name,
-            request.description,
-            ServiceFormat::Cog,
-            storage_uri,
-            spatial,
-        )
-        .await
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn insert_catalog_record(
-    catalog: &dyn CatalogClient,
-    id: Uuid,
-    name: String,
-    description: Option<String>,
-    format: ServiceFormat,
-    storage_uri: String,
-    spatial: crate::metadata::SpatialMetadata,
-) -> Result<Uuid, IngestionError> {
-    let now = chrono::Utc::now();
-    let service = ServiceRecord {
-        id,
-        name,
-        description,
-        format,
-        storage_uri,
-        crs: spatial.crs,
-        temporal_start: None,
-        temporal_end: None,
-        created_at: now,
-    };
-    let footprint = FootprintRecord {
-        service_id: id,
-        geometry_wkt: spatial.geometry_wkt,
-        cloud_cover: None,
-        partition_key: String::new(),
-    };
-
-    catalog
-        .insert_footprint(service, footprint)
-        .await
-        .map_err(IngestionError::from)
 }
 
 #[async_trait]
 impl crate::IngestionService for MantleIngestionService {
-    async fn register_uploaded_service(
+    async fn register_scene(
         &self,
-        request: UploadRequest,
-        service_id: Uuid,
-        storage_uri: String,
-        header_peek: Vec<u8>,
-    ) -> Result<Uuid, IngestionError> {
-        self.register_uploaded_service_with_id(request, storage_uri, header_peek, service_id)
-            .await
+        request: AddSceneRequest,
+        assets: Vec<UploadedAsset>,
+    ) -> Result<AddSceneResponse, IngestionError> {
+        if assets.is_empty() {
+            return Err(IngestionError::Storage(
+                "scene requires at least one asset".into(),
+            ));
+        }
+
+        let now = chrono::Utc::now();
+        self.catalog
+            .create_service(ServiceRecord {
+                id: request.service_id,
+                name: request.service_name.clone().unwrap_or_else(|| "untitled".into()),
+                description: request.description.clone(),
+                format: ServiceFormat::Cog,
+                created_at: now,
+            })
+            .await?;
+
+        // Landsat-style bands from the same scene share one footprint; the
+        // first asset's harvested geometry stands in for the whole scene
+        // rather than unioning N nearly-identical polygons.
+        let mut scene_geometry: Option<String> = None;
+        let mut asset_records = Vec::with_capacity(assets.len());
+        let asset_ids = assets.iter().map(|a| a.id).collect();
+
+        for asset in assets {
+            let spatial = harvest_from_bytes(&asset.header_peek, &asset.content_type)?;
+            if scene_geometry.is_none() {
+                scene_geometry = Some(spatial.geometry_wkt.clone());
+            }
+            asset_records.push(AssetRecord {
+                id: asset.id,
+                service_id: request.service_id,
+                scene_id: request.scene_id,
+                band_role: asset.band_role,
+                band_index: 1,
+                format: ServiceFormat::Cog,
+                storage_uri: asset.storage_uri,
+                crs: spatial.crs,
+                created_at: now,
+            });
+        }
+
+        let scene = SceneRecord {
+            id: request.scene_id,
+            service_id: request.service_id,
+            label: request.label,
+            acquired_at: request.acquired_at,
+            created_at: now,
+        };
+        let footprint = FootprintRecord {
+            scene_id: request.scene_id,
+            service_id: request.service_id,
+            geometry_wkt: scene_geometry.expect("checked assets non-empty above"),
+            cloud_cover: None,
+            partition_key: String::new(),
+        };
+
+        self.catalog.add_scene(scene, asset_records, footprint).await?;
+
+        Ok(AddSceneResponse {
+            service_id: request.service_id,
+            scene_id: request.scene_id,
+            asset_ids,
+        })
     }
 
     async fn register_cloud_reference(
         &self,
         request: crate::CloudReferenceRequest,
-    ) -> Result<Uuid, IngestionError> {
+    ) -> Result<uuid::Uuid, IngestionError> {
         crate::cloud_ref::register_cloud_reference(self, request).await
     }
 }

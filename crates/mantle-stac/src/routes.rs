@@ -76,10 +76,13 @@ where
     let StacState { catalog } = StacState::from_ref(&state);
     let limit = params.effective_limit();
     let query = params.to_spatial_query();
-    let services = catalog
+    let scenes = catalog
         .spatial_query(query)
         .await
         .map_err(catalog_to_status)?;
+    // TODO(Phase 2): one STAC Item per scene with real per-band Assets,
+    // instead of flattening to each scene's single default asset.
+    let services: Vec<_> = scenes.iter().filter_map(|s| s.primary_service_ref()).collect();
 
     let take = (limit as usize).min(services.len());
     let features = services_to_stac_items(&services[..take]);
@@ -125,10 +128,13 @@ where
     let StacState { catalog } = StacState::from_ref(&state);
     let limit = params.effective_limit();
     let query = params.to_spatial_query();
-    let services = catalog
+    let scenes = catalog
         .spatial_query(query)
         .await
         .map_err(catalog_to_status)?;
+    // TODO(Phase 2): one STAC Item per scene with real per-band Assets,
+    // instead of flattening to each scene's single default asset.
+    let services: Vec<_> = scenes.iter().filter_map(|s| s.primary_service_ref()).collect();
 
     let matched = services.len() as u64;
     let take = (limit as usize).min(services.len());
@@ -150,33 +156,59 @@ fn catalog_to_status(err: CatalogError) -> StatusCode {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use mantle_arrow::{ServiceFormat, ServiceRef};
+    use mantle_arrow::{AssetRef, SceneRef, ServiceFormat};
     use mantle_catalog::{
-        FootprintRecord, ServiceRecord, SpatialQuery, StubCatalogClient, VirtualServiceRecord,
+        AssetRecord, FootprintRecord, SceneDeletionRecord, SceneRecord, SceneWithAssets,
+        ServiceRecord, SpatialQuery, StubCatalogClient, VirtualServiceRecord,
     };
     use mantle_config::CatalogConfig;
     use uuid::Uuid;
 
     struct MockCatalog {
-        services: Vec<ServiceRef>,
+        scenes: Vec<SceneRef>,
     }
 
     #[async_trait]
     impl CatalogClient for MockCatalog {
-        async fn insert_footprint(
-            &self,
-            service: ServiceRecord,
-            _footprint: FootprintRecord,
-        ) -> Result<Uuid, CatalogError> {
+        async fn create_service(&self, service: ServiceRecord) -> Result<Uuid, CatalogError> {
             Ok(service.id)
         }
 
-        async fn spatial_query(&self, _query: SpatialQuery) -> Result<Vec<ServiceRef>, CatalogError> {
-            Ok(self.services.clone())
+        async fn add_scene(
+            &self,
+            scene: SceneRecord,
+            _assets: Vec<AssetRecord>,
+            _footprint: FootprintRecord,
+        ) -> Result<Uuid, CatalogError> {
+            Ok(scene.id)
+        }
+
+        async fn spatial_query(&self, _query: SpatialQuery) -> Result<Vec<SceneRef>, CatalogError> {
+            Ok(self.scenes.clone())
         }
 
         async fn get_service(&self, id: Uuid) -> Result<ServiceRecord, CatalogError> {
             Err(CatalogError::NotFound(id))
+        }
+
+        async fn list_scenes(&self, service_id: Uuid) -> Result<Vec<SceneWithAssets>, CatalogError> {
+            Err(CatalogError::NotFound(service_id))
+        }
+
+        async fn get_scene(&self, scene_id: Uuid) -> Result<SceneWithAssets, CatalogError> {
+            Err(CatalogError::NotFound(scene_id))
+        }
+
+        async fn delete_scene(
+            &self,
+            scene_id: Uuid,
+            _reason: Option<String>,
+        ) -> Result<SceneDeletionRecord, CatalogError> {
+            Err(CatalogError::NotFound(scene_id))
+        }
+
+        async fn purge_scene(&self, scene_id: Uuid) -> Result<(), CatalogError> {
+            Err(CatalogError::NotFound(scene_id))
         }
 
         async fn attach_function(
@@ -244,20 +276,26 @@ mod tests {
 
     #[tokio::test]
     async fn search_respects_limit() {
-        let services: Vec<ServiceRef> = (0..5)
-            .map(|i| ServiceRef {
-                id: Uuid::new_v4(),
-                name: format!("svc-{i}"),
-                format: ServiceFormat::Cog,
-                storage_uri: format!("s3://bucket/{i}.tif"),
-                crs: None,
+        let scenes: Vec<SceneRef> = (0..5)
+            .map(|i| SceneRef {
+                scene_id: Uuid::new_v4(),
+                service_id: Uuid::new_v4(),
+                service_name: format!("svc-{i}"),
                 geometry_wkt: None,
+                assets: vec![AssetRef {
+                    id: Uuid::new_v4(),
+                    band_role: "data".into(),
+                    band_index: 1,
+                    format: ServiceFormat::Cog,
+                    storage_uri: format!("s3://bucket/{i}.tif"),
+                    crs: None,
+                }],
             })
             .collect();
 
         let app = TestApp {
             catalog: Arc::new(MockCatalog {
-                services: services.clone(),
+                scenes: scenes.clone(),
             }),
         };
 

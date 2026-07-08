@@ -19,6 +19,14 @@ pub struct IngestionResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct AddSceneResponse {
+    pub service_id: Uuid,
+    pub scene_id: Uuid,
+    #[serde(default)]
+    pub asset_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ProcessExecutionResponse {
     pub job_id: Uuid,
     pub status_url: String,
@@ -61,7 +69,9 @@ pub async fn require_api_healthy() {
     );
 }
 
-pub async fn upload_cog_fixture(name: &str, cog_path: &Path) -> Uuid {
+/// Uploads a single-file service (band_role `"data"`). Returns
+/// `(service_id, scene_id, asset_id)`.
+pub async fn upload_cog_fixture(name: &str, cog_path: &Path) -> (Uuid, Uuid, Uuid) {
     let bytes = std::fs::read(cog_path)
         .unwrap_or_else(|e| panic!("read COG fixture {}: {e}", cog_path.display()));
     let part = Part::bytes(bytes)
@@ -90,9 +100,13 @@ pub async fn upload_cog_fixture(name: &str, cog_path: &Path) -> Uuid {
         status.is_success(),
         "upload failed: {status} {body_text}"
     );
-    let body: IngestionResponse =
+    let body: AddSceneResponse =
         serde_json::from_str(&body_text).expect("upload json");
-    body.service_id
+    let asset_id = *body
+        .asset_ids
+        .first()
+        .expect("upload response missing asset_ids");
+    (body.service_id, body.scene_id, asset_id)
 }
 
 pub async fn register_cloud_reference(name: &str, storage_uri: &str) -> Uuid {

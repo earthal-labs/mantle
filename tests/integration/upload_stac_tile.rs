@@ -15,7 +15,8 @@ async fn upload_stac_search_tile_flow() {
         .map(PathBuf::from)
         .expect("set MANTLE_TEST_COG_PATH to a local COG GeoTIFF");
 
-    let service_id = stack::upload_cog_fixture("integration-upload", &cog_path).await;
+    let (service_id, _scene_id, asset_id) =
+        stack::upload_cog_fixture("integration-upload", &cog_path).await;
 
     let search = stack::stac_search_bbox("-180,-90,180,90").await;
     let features = search["features"]
@@ -23,9 +24,13 @@ async fn upload_stac_search_tile_flow() {
         .expect("STAC FeatureCollection.features");
     assert!(
         features.iter().any(|f| {
+            // Phase 1: STAC items are still keyed by the scene's default
+            // asset id (flattened via SceneRef::primary_service_ref), not
+            // the scene id itself — Phase 2 (scene_to_stac_item) will make
+            // this the scene id with real per-band assets.
             f["id"]
                 .as_str()
-                .map(|id| id == service_id.to_string())
+                .map(|id| id == asset_id.to_string())
                 .unwrap_or(false)
         }),
         "STAC search did not return uploaded service {service_id}"

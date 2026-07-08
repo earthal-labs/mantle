@@ -11,6 +11,16 @@ CREATE TRIGGER services_no_update
     BEFORE UPDATE OR DELETE ON services
     FOR EACH ROW EXECUTE PROCEDURE mantle_reject_mutation();
 
+DROP TRIGGER IF EXISTS scenes_no_update ON scenes;
+CREATE TRIGGER scenes_no_update
+    BEFORE UPDATE OR DELETE ON scenes
+    FOR EACH ROW EXECUTE PROCEDURE mantle_reject_mutation();
+
+DROP TRIGGER IF EXISTS service_assets_no_update ON service_assets;
+CREATE TRIGGER service_assets_no_update
+    BEFORE UPDATE OR DELETE ON service_assets
+    FOR EACH ROW EXECUTE PROCEDURE mantle_reject_mutation();
+
 DROP TRIGGER IF EXISTS footprints_no_update ON footprints;
 CREATE TRIGGER footprints_no_update
     BEFORE UPDATE OR DELETE ON footprints
@@ -22,6 +32,7 @@ BEGIN
         'mantle_footprint_insert',
         json_build_object(
             'footprint_id', NEW.id,
+            'scene_id', NEW.scene_id,
             'service_id', NEW.service_id,
             'partition_key', NEW.partition_key
         )::text

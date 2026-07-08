@@ -87,9 +87,15 @@ All routes are served by `mantle-api` unless noted. Admin routes require `Author
 | GET | `/health` | Liveness / readiness |
 | GET | `/console` | Barebones dev console — STAC search, service admin, native Leaflet tile viewer, plugin listing, job submit/poll |
 | GET | `/status/{job_id}` | Async job polling (`queued` → `running` → `succeeded` / `failed`) |
-| GET | `/services/{id}` | Unified service resource — base service by UUID, or attached/output virtual service by slug |
-| GET | `/tiles/{z}/{x}/{y}` | Legacy tile shortcut (`?service_id`, `?band`, `?format`, `?render`) |
-| POST | `/admin/services/upload` | Multipart COG upload (field `file`) |
+| GET | `/services/{id}` | Unified service resource — base service by UUID (includes its `scenes`), or attached/output virtual service by slug |
+| GET | `/tiles/{z}/{x}/{y}` | Legacy tile shortcut (`?service_id`, `?band`, `?format`, `?render`) — renders the service's most recent scene's default asset |
+| GET | `/services/{id}/scenes/{scene_id}/composite/{z}/{x}/{y}` | Composite a scene's single-band assets into an RGB tile (`?bands=B4,B3,B2`) — no vRPM attach required |
+| POST | `/admin/services/upload` | Multipart upload — creates a service + one scene. One `file` field for a single-band service, or one `band:<role>` field per band (e.g. `band:red`, `band:B4`) for a multi-band scene |
+| POST | `/admin/services/{id}/scenes` | Same multipart contract as upload, adds a scene to an existing service |
+| GET | `/admin/services/{id}/scenes` | List a service's scenes (each with its assets) |
+| GET | `/admin/services/{id}/scenes/{scene_id}` | One scene's detail |
+| POST | `/admin/services/{id}/scenes/{scene_id}/delete` | Soft-delete one scene without affecting the rest of the service |
+| POST | `/admin/services/{id}/scenes/{scene_id}/purge` | Immediate hard purge of one scene |
 | POST | `/admin/services/reference` | Register external S3/HTTPS URI (Virtual Zarr → Icechunk for NetCDF) |
 | GET | `/stac/` | STAC 1.0 landing page |
 | GET | `/stac/collections` | List collections |

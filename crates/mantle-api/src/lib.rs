@@ -9,8 +9,8 @@ mod plugins;
 mod services;
 
 use admin::{
-    attach_function, debug_service, delete_service, purge_service, register_cloud_reference,
-    upload_service,
+    add_scene, attach_function, debug_service, delete_scene, delete_service, get_scene,
+    list_scenes, purge_scene, purge_service, register_cloud_reference, upload_service,
 };
 use auth::{load_admin_token, require_admin_auth};
 use jobs::get_job_status;
@@ -119,8 +119,8 @@ async fn get_tile(
     };
 
     let services: Vec<ServiceRef> = if params.service_id.is_some() {
-        match state.catalog.get_service(service_id).await {
-            Ok(record) => vec![record.to_service_ref()],
+        match state.catalog.default_service_ref(service_id).await {
+            Ok(service_ref) => vec![service_ref],
             Err(_) => Vec::new(),
         }
     } else {
@@ -203,6 +203,10 @@ pub async fn build_router(config: Arc<MantleConfig>) -> anyhow::Result<Router> {
         .route("/services/{id}/purge", post(purge_service))
         .route("/services/{id}/debug", get(debug_service))
         .route("/services/{service_id}/attach", post(attach_function))
+        .route("/services/{id}/scenes", post(add_scene).get(list_scenes))
+        .route("/services/{id}/scenes/{scene_id}", get(get_scene))
+        .route("/services/{id}/scenes/{scene_id}/delete", post(delete_scene))
+        .route("/services/{id}/scenes/{scene_id}/purge", post(purge_scene))
         .layer(DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

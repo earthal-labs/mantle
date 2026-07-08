@@ -93,13 +93,15 @@ impl OxigdalRasterEngine {
         }
 
         let bounds = tile_bounds_web_mercator(request.z, request.x, request.y);
-        self.catalog
+        let scenes = self
+            .catalog
             .spatial_query(SpatialQuery {
                 bbox: Some(bounds.to_rect()),
                 ..Default::default()
             })
             .await
-            .map_err(RasterError::Catalog)
+            .map_err(RasterError::Catalog)?;
+        Ok(scenes.iter().filter_map(|s| s.primary_service_ref()).collect())
     }
 
     async fn read_service_layer(
@@ -250,13 +252,15 @@ impl OxigdalRasterEngine {
             return Ok(refs.to_vec());
         }
         let bounds = tile_bounds_web_mercator(request.z, request.x, request.y);
-        self.catalog
+        let scenes = self
+            .catalog
             .spatial_query(SpatialQuery {
                 bbox: Some(bounds.to_rect()),
                 ..Default::default()
             })
             .await
-            .map_err(RasterError::Catalog)
+            .map_err(RasterError::Catalog)?;
+        Ok(scenes.iter().filter_map(|s| s.primary_service_ref()).collect())
     }
 
     fn encode_scalar_tile(
@@ -380,6 +384,25 @@ impl RasterEngine for OxigdalRasterEngine {
         Ok(layers)
     }
 
+    async fn render_composite_tile(
+        &self,
+        assets: &[(String, ServiceRef)],
+        request: &TileRequest,
+        format: TileFormat,
+    ) -> Result<Vec<u8>, RasterError> {
+        let tile_bounds = tile_bounds_web_mercator(request.z, request.x, request.y);
+        let mut channels = Vec::with_capacity(assets.len());
+        for (channel, service) in assets {
+            let layer = self
+                .read_service_layer(service, &tile_bounds, 1)
+                .await?
+                .unwrap_or_else(|| TileLayer::transparent(TILE_SIZE, TILE_SIZE));
+            channels.push((channel.clone(), layer));
+        }
+        let rgba = crate::colormap::compose_rgb(&channels);
+        encode_tile(&rgba, TILE_SIZE, TILE_SIZE, format).map_err(RasterError::Encode)
+    }
+
     async fn debug_metadata(&self, service: &ServiceRef) -> Result<CogDebugInfo, RasterError> {
         if service.format != ServiceFormat::Cog {
             return Err(RasterError::NotImplemented(
@@ -427,6 +450,15 @@ impl RasterEngine for StubRasterEngine {
             .iter()
             .map(|_| TileLayer::transparent(TILE_SIZE, TILE_SIZE))
             .collect())
+    }
+
+    async fn render_composite_tile(
+        &self,
+        _assets: &[(String, ServiceRef)],
+        _request: &TileRequest,
+        format: TileFormat,
+    ) -> Result<Vec<u8>, RasterError> {
+        encode_empty_tile(TILE_SIZE, TILE_SIZE, format).map_err(RasterError::Encode)
     }
 
     async fn debug_metadata(&self, _service: &ServiceRef) -> Result<CogDebugInfo, RasterError> {

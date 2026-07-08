@@ -152,6 +152,11 @@
 
     <div id="item-tab-details" class="item-tab">
       <div id="item-resource-card"></div>
+      <fieldset id="item-scenes-fieldset" style="display:none;">
+        <legend>Scenes</legend>
+        <div id="item-scenes-list"></div>
+        <button class="action" onclick="openUploadModal(currentItemId)">Add scene</button>
+      </fieldset>
       <fieldset id="item-attached-fieldset" style="display:none;">
         <legend>Attached services</legend>
         <div id="item-attached-list"></div>
@@ -168,6 +173,12 @@
         <button class="action secondary" onclick="itemLoadOverlay()">Reload tiles</button>
         <button class="action secondary" onclick="itemZoomTo()">Zoom to service</button>
         <span id="item-tile-status" class="hint"></span>
+      </div>
+      <div class="row" id="item-composite-picker" style="display:none;">
+        <label>red<select id="composite-r" onchange="itemLoadOverlay()"></select></label>
+        <label>green<select id="composite-g" onchange="itemLoadOverlay()"></select></label>
+        <label>blue<select id="composite-b" onchange="itemLoadOverlay()"></select></label>
+        <span class="hint">Multi-band scene — composited directly, no vRPM attach needed.</span>
       </div>
       <div id="item-map"></div>
     </div>
@@ -291,21 +302,25 @@
 <!-- ================= Upload modal ================= -->
 <div id="upload-modal" class="modal-backdrop">
   <div class="modal">
-    <h3>Upload a service</h3>
-    <div class="row" style="flex-direction:column; align-items:stretch;">
+    <h3 id="upload-modal-title">Upload a service</h3>
+    <div id="upload-name-fields" class="row" style="flex-direction:column; align-items:stretch;">
       <label>name<input id="up-name" placeholder="optional" /></label>
       <label>description<input id="up-description" placeholder="optional" /></label>
-      <label>file<input id="up-file" type="file" /></label>
     </div>
-    <div class="hint">Or register an external S3/HTTPS URI instead of uploading bytes:</div>
-    <div class="row" style="flex-direction:column; align-items:stretch;">
-      <label>storage_uri<input id="ref-uri" placeholder="s3://bucket/key.tif" /></label>
+    <div id="upload-band-rows"></div>
+    <button class="action secondary" type="button" onclick="addUploadBandRow()">+ Add band</button>
+    <div class="hint">Single file: leave "band role" blank. Multiple files (e.g. Landsat B1–B7): give every row a distinct role like "red" or "B4".</div>
+    <div id="upload-reference-section">
+      <div class="hint">Or register an external S3/HTTPS URI instead of uploading bytes:</div>
+      <div class="row" style="flex-direction:column; align-items:stretch;">
+        <label>storage_uri<input id="ref-uri" placeholder="s3://bucket/key.tif" /></label>
+      </div>
     </div>
     <pre id="upload-output"></pre>
     <div class="actions">
       <button class="action secondary" onclick="closeModal('upload-modal')">Close</button>
-      <button class="action" onclick="referenceService()">Register reference</button>
-      <button class="action" onclick="uploadService()">Upload file</button>
+      <button class="action" id="upload-reference-btn" onclick="referenceService()">Register reference</button>
+      <button class="action" onclick="uploadService()">Upload file(s)</button>
     </div>
   </div>
 </div>
@@ -437,28 +452,68 @@
     }).join('');
   }
 
-  function openUploadModal() {
+  let uploadTargetServiceId = null;
+
+  function openUploadModal(serviceId) {
+    uploadTargetServiceId = serviceId || null;
+    const addingScene = !!uploadTargetServiceId;
+    document.getElementById('upload-modal-title').textContent = addingScene ? 'Add a scene' : 'Upload a service';
+    document.getElementById('upload-name-fields').style.display = addingScene ? 'none' : '';
+    document.getElementById('upload-reference-section').style.display = addingScene ? 'none' : '';
     document.getElementById('up-name').value = '';
     document.getElementById('up-description').value = '';
-    document.getElementById('up-file').value = '';
     document.getElementById('ref-uri').value = '';
+    resetUploadRows();
     show('upload-output', '');
     openModal('upload-modal');
   }
 
+  function resetUploadRows() {
+    document.getElementById('upload-band-rows').innerHTML = '';
+    addUploadBandRow();
+  }
+
+  function addUploadBandRow() {
+    const row = document.createElement('div');
+    row.className = 'row upload-band-row';
+    row.innerHTML = `
+      <label style="width:120px;">band role<input type="text" class="band-role-input" placeholder="(single file)" /></label>
+      <label style="flex:1;">file<input type="file" class="band-file-input" /></label>
+      <button type="button" class="action secondary" onclick="this.closest('.upload-band-row').remove()">&times;</button>
+    `;
+    document.getElementById('upload-band-rows').appendChild(row);
+  }
+
   async function uploadService() {
-    const fileInput = document.getElementById('up-file');
-    if (!fileInput.files.length) {
-      show('upload-output', 'select a file first');
+    const rows = Array.from(document.querySelectorAll('#upload-band-rows .upload-band-row'))
+      .filter((row) => row.querySelector('.band-file-input').files.length);
+
+    if (!rows.length) {
+      show('upload-output', 'select at least one file first');
       return;
     }
+    if (rows.length > 1 && rows.some((row) => !row.querySelector('.band-role-input').value.trim())) {
+      show('upload-output', 'when uploading multiple files, every row needs a band role (e.g. red, B4)');
+      return;
+    }
+
     const form = new FormData();
-    const name = document.getElementById('up-name').value.trim();
-    const description = document.getElementById('up-description').value.trim();
-    if (name) form.append('name', name);
-    if (description) form.append('description', description);
-    form.append('file', fileInput.files[0]);
-    const res = await fetch('/admin/services/upload', {
+    if (!uploadTargetServiceId) {
+      const name = document.getElementById('up-name').value.trim();
+      const description = document.getElementById('up-description').value.trim();
+      if (name) form.append('name', name);
+      if (description) form.append('description', description);
+    }
+    rows.forEach((row) => {
+      const file = row.querySelector('.band-file-input').files[0];
+      const role = row.querySelector('.band-role-input').value.trim();
+      form.append(role ? `band:${role}` : 'file', file);
+    });
+
+    const url = uploadTargetServiceId
+      ? `/admin/services/${encodeURIComponent(uploadTargetServiceId)}/scenes`
+      : '/admin/services/upload';
+    const res = await fetch(url, {
       method: 'POST',
       headers: authHeaders(),
       body: form,
@@ -467,8 +522,12 @@
     show('upload-output', data);
     if (data && data.service_id) {
       closeModal('upload-modal');
-      loadContent();
-      location.hash = '#/item/' + encodeURIComponent(data.service_id);
+      if (uploadTargetServiceId) {
+        loadItem(uploadTargetServiceId);
+      } else {
+        loadContent();
+        location.hash = '#/item/' + encodeURIComponent(data.service_id);
+      }
     }
   }
 
@@ -502,6 +561,7 @@
 
   async function loadItem(id) {
     currentItemId = id;
+    currentSceneId = null;
     document.getElementById('item-title').textContent = id;
     document.getElementById('item-breadcrumb-name').textContent = id;
     itemShowTab('details');
@@ -516,9 +576,12 @@
     const card = document.getElementById('item-resource-card');
     const attachedFieldset = document.getElementById('item-attached-fieldset');
     const attachedList = document.getElementById('item-attached-list');
+    const scenesFieldset = document.getElementById('item-scenes-fieldset');
     if (!data || data.error) {
       card.innerHTML = '<div class="empty-state">Not found.</div>';
       attachedFieldset.style.display = 'none';
+      scenesFieldset.style.display = 'none';
+      currentScenes = [];
       return;
     }
     document.getElementById('item-title').textContent = data.name || data.slug || currentItemId;
@@ -539,6 +602,7 @@
           <tr><td>storage_uri</td><td>${data.storage_uri || ''}</td></tr>
           ${extentRow}
         </table>`;
+      renderScenesList(data.scenes || []);
       const attached = data.attached_services || [];
       if (attached.length) {
         attachedFieldset.style.display = '';
@@ -555,6 +619,8 @@
       // VirtualService (attached vRPM or pRPM output)
       const parent = data.parent_service || {};
       attachedFieldset.style.display = 'none';
+      scenesFieldset.style.display = 'none';
+      currentScenes = [];
       card.innerHTML = `
         <table>
           <tr><td>kind</td><td>${data.service_kind || 'virtual'}</td></tr>
@@ -564,6 +630,61 @@
           <tr><td>parent service</td><td>${parent.name || ''} <a href="#/item/${encodeURIComponent(parent.id || '')}">(${parent.id || ''})</a></td></tr>
         </table>`;
     }
+  }
+
+  // ---- scenes ----
+  let currentScenes = [];
+  let currentSceneId = null;
+
+  function renderScenesList(scenes) {
+    currentScenes = scenes;
+    const fieldset = document.getElementById('item-scenes-fieldset');
+    const list = document.getElementById('item-scenes-list');
+    fieldset.style.display = '';
+    if (!scenes.length) {
+      list.innerHTML = '<div class="hint">No scenes yet — Add scene to upload one.</div>';
+      return;
+    }
+    list.innerHTML = `<table><tr><th>label</th><th>acquired_at</th><th>bands</th><th></th></tr>${
+      scenes.map((s) => `<tr>
+          <td>${s.scene.label || '<em>untitled</em>'}</td>
+          <td>${s.scene.acquired_at || ''}</td>
+          <td>${s.assets.map((a) => a.band_role).join(', ')}</td>
+          <td>
+            <button class="action secondary" onclick="itemViewScene('${s.scene.id}')">View</button>
+            <button class="action danger" onclick="deleteOneScene('${s.scene.id}')">Delete</button>
+          </td>
+        </tr>`).join('')
+    }</table>`;
+  }
+
+  async function deleteOneScene(sceneId) {
+    if (!confirm('Delete this scene? The rest of the service is unaffected.')) return;
+    const res = await fetch(`/admin/services/${encodeURIComponent(currentItemId)}/scenes/${encodeURIComponent(sceneId)}/delete`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ reason: 'deleted via console' }),
+    });
+    if (res.ok) {
+      loadItem(currentItemId);
+    } else {
+      show('item-resource-json', await asJson(res));
+    }
+  }
+
+  function updateCompositePicker(scene) {
+    const picker = document.getElementById('item-composite-picker');
+    if (!scene || scene.assets.length < 2) {
+      picker.style.display = 'none';
+      return;
+    }
+    picker.style.display = '';
+    const options = scene.assets.map((a) => `<option value="${a.band_role}">${a.band_role}</option>`).join('');
+    ['composite-r', 'composite-g', 'composite-b'].forEach((id, i) => {
+      const select = document.getElementById(id);
+      select.innerHTML = options;
+      if (scene.assets[i]) select.value = scene.assets[i].band_role;
+    });
   }
 
   function itemShowTab(tab) {
@@ -605,10 +726,29 @@
     if (currentItem && currentItem.type !== 'Service') {
       return `/services/${encodeURIComponent(currentItem.slug)}/tiles/{z}/{x}/{y}?format=${encodeURIComponent(format)}`;
     }
+    const scene = currentScenes.find((s) => s.scene.id === currentSceneId) || currentScenes[0];
+    if (scene && scene.assets.length > 1) {
+      const r = document.getElementById('composite-r').value;
+      const g = document.getElementById('composite-g').value;
+      const b = document.getElementById('composite-b').value;
+      const roles = [r, g, b].filter(Boolean).map(encodeURIComponent).join(',');
+      return `/services/${encodeURIComponent(currentItemId)}/scenes/${encodeURIComponent(scene.scene.id)}/composite/{z}/{x}/{y}?bands=${roles}&format=${encodeURIComponent(format)}`;
+    }
     return `/tiles/{z}/{x}/{y}?service_id=${encodeURIComponent(currentItemId)}&format=${encodeURIComponent(format)}`;
   }
 
   function itemViewInMap() {
+    const scene = currentScenes[0] || null;
+    currentSceneId = scene ? scene.scene.id : null;
+    updateCompositePicker(scene);
+    itemShowTab('map');
+    itemLoadOverlay();
+  }
+
+  function itemViewScene(sceneId) {
+    currentSceneId = sceneId;
+    const scene = currentScenes.find((s) => s.scene.id === sceneId) || null;
+    updateCompositePicker(scene);
     itemShowTab('map');
     itemLoadOverlay();
   }

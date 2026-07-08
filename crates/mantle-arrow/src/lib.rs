@@ -29,6 +29,70 @@ pub enum ServiceFormat {
     Icechunk,
 }
 
+/// One band file within a scene (the STAC Asset equivalent) — a
+/// single-band-per-file reference, same shape `ServiceRef` has always had,
+/// just tagged with which named band role it plays in its scene.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetRef {
+    pub id: Uuid,
+    pub band_role: String,
+    pub band_index: u32,
+    pub format: ServiceFormat,
+    pub storage_uri: String,
+    pub crs: Option<String>,
+}
+
+impl AssetRef {
+    /// One raster file reference, for every existing single-band consumer
+    /// (mosaic rendering, debug metadata, band-index reads) — `ServiceRef`
+    /// itself is unchanged, it's just now populated from an asset rather
+    /// than a bare service row.
+    pub fn to_service_ref(&self, name: &str) -> ServiceRef {
+        ServiceRef {
+            id: self.id,
+            name: name.to_string(),
+            format: self.format,
+            storage_uri: self.storage_uri.clone(),
+            crs: self.crs.clone(),
+            geometry_wkt: None,
+        }
+    }
+}
+
+/// One spatiotemporal acquisition (the STAC Item equivalent) — a service's
+/// scene, carrying every band file (asset) captured for it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SceneRef {
+    pub scene_id: Uuid,
+    pub service_id: Uuid,
+    pub service_name: String,
+    pub geometry_wkt: Option<String>,
+    pub assets: Vec<AssetRef>,
+}
+
+impl SceneRef {
+    /// One representative single-file `ServiceRef`, for every consumer that
+    /// only ever needed one raster file per scene (the plain single-upload
+    /// case, or any code path not yet updated for real multi-asset
+    /// rendering). Picks the asset tagged `band_role == "data"` if present
+    /// (the plain single-asset case), else the first asset.
+    pub fn primary_service_ref(&self) -> Option<ServiceRef> {
+        let asset = self
+            .assets
+            .iter()
+            .find(|a| a.band_role == "data")
+            .or_else(|| self.assets.first())?;
+        Some(ServiceRef {
+            id: asset.id,
+            name: self.service_name.clone(),
+            format: asset.format,
+            storage_uri: asset.storage_uri.clone(),
+            crs: asset.crs.clone(),
+            geometry_wkt: self.geometry_wkt.clone(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TileRequest {
     pub service_id: Uuid,

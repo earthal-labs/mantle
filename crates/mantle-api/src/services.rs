@@ -48,6 +48,15 @@ pub struct ServiceTileQuery {
     pub overrides: HashMap<String, String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CompositeTileQuery {
+    /// Comma-separated asset `band_role`s, positionally mapped to
+    /// red/green/blue (a 4th+ role is accepted but currently ignored by the
+    /// RGB compositor) — e.g. `bands=B4,B3,B2` for a Landsat true-color view.
+    pub bands: String,
+    pub format: Option<String>,
+}
+
 /// Absolute origin (`scheme://host`) for the incoming request, used to
 /// build fully-qualified `links[].href` values — matching ArcGIS's own REST
 /// directory convention of publishing complete service URLs rather than
@@ -77,6 +86,10 @@ pub fn services_router() -> Router<AppState> {
         .route(
             "/{slug}/stac/collections/{collection_id}/items",
             get(get_service_stac_items),
+        )
+        .route(
+            "/{id}/scenes/{scene_id}/composite/{z}/{x}/{y}",
+            get(get_composite_tile),
         )
 }
 
@@ -128,7 +141,7 @@ pub async fn attach_function(
 /// index) plus every attached/output virtual service, each tagged with
 /// `kind` so the console can render one flat card grid.
 pub async fn list_services(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let base_services = state
+    let scenes = state
         .catalog
         .spatial_query(SpatialQuery::default())
         .await
@@ -139,19 +152,22 @@ pub async fn list_services(State(state): State<AppState>) -> Result<Json<Value>,
         .await
         .map_err(catalog_err)?;
 
-    let mut items: Vec<Value> = base_services
-        .iter()
-        .map(|service| {
-            json!({
-                "id": service.id,
-                "name": service.name,
-                "format": service.format,
-                "storage_uri": service.storage_uri,
-                "crs": service.crs,
-                "kind": "service",
-            })
-        })
-        .collect();
+    // A service can now span multiple scenes; the catalog list shows one
+    // card per service, not per scene, so dedupe on service_id.
+    let mut seen = std::collections::HashSet::new();
+    let mut items: Vec<Value> = Vec::new();
+    for scene in &scenes {
+        if !seen.insert(scene.service_id) {
+            continue;
+        }
+        let format = scene.assets.first().map(|a| a.format);
+        items.push(json!({
+            "id": scene.service_id,
+            "name": scene.service_name,
+            "format": format,
+            "kind": "service",
+        }));
+    }
     items.extend(virtual_services.iter().map(|service| {
         json!({
             "id": service.id,
@@ -194,15 +210,21 @@ async fn get_base_service_resource(
         .await
         .map_err(catalog_err)?;
 
-    // Best-effort: a service can exist in the catalog with an unreadable or
-    // not-yet-georeferenced source file. Extent is a bonus, not a
-    // requirement, for this resource to be useful.
-    let extent = state
-        .raster
-        .debug_metadata(&service.to_service_ref())
-        .await
-        .ok();
+    // Best-effort: a service can exist in the catalog with no readable scene
+    // yet (e.g. between upload and first scene) or an unreadable/
+    // not-yet-georeferenced source file. Extent/storage_uri/crs are a bonus,
+    // not a requirement, for this resource to be useful.
+    let default_asset = state.catalog.default_service_ref(service_id).await.ok();
+    let extent = match &default_asset {
+        Some(service_ref) => state.raster.debug_metadata(service_ref).await.ok(),
+        None => None,
+    };
 
+    let scenes = state
+        .catalog
+        .list_scenes(service_id)
+        .await
+        .unwrap_or_default();
     let attached_services = state
         .catalog
         .list_virtual_services(Some(service.id))
@@ -215,10 +237,11 @@ async fn get_base_service_resource(
         "name": service.name,
         "description": service.description,
         "format": service.format,
-        "storage_uri": service.storage_uri,
-        "crs": service.crs,
+        "storage_uri": default_asset.as_ref().map(|r| &r.storage_uri),
+        "crs": default_asset.as_ref().and_then(|r| r.crs.clone()),
         "created_at": service.created_at,
         "extent": extent,
+        "scenes": scenes,
         "attached_services": attached_services,
         "links": [
             {"rel": "self", "href": format!("{base}/services/{}", service.id), "method": "GET"},
@@ -250,6 +273,7 @@ async fn get_virtual_service_resource(
         .get_service(parent_id)
         .await
         .map_err(catalog_err)?;
+    let parent_asset = state.catalog.default_service_ref(parent_id).await.ok();
 
     let client = VrpmSidecarClient::new(&state.config.analytics.vrpm_sidecar_url);
     let plugin = client
@@ -279,8 +303,8 @@ async fn get_virtual_service_resource(
         "parent_service": {
             "id": parent.id,
             "name": parent.name,
-            "storage_uri": parent.storage_uri,
-            "format": parent.format,
+            "storage_uri": parent_asset.as_ref().map(|r| &r.storage_uri),
+            "format": parent_asset.as_ref().map(|r| r.format),
         },
         "links": [
             {"rel": "self", "href": format!("{base}/services/{}", service.slug)},
@@ -331,6 +355,7 @@ async fn get_service_stac_items(
         .get_service(parent_id)
         .await
         .map_err(catalog_err)?;
+    let parent_asset = state.catalog.default_service_ref(parent_id).await.ok();
 
     let item_id = format!("{}-{}", parent.id, service.function_id);
     if collection_id != slug && collection_id != item_id {
@@ -350,7 +375,7 @@ async fn get_service_stac_items(
             },
             "assets": {
                 "source": {
-                    "href": parent.storage_uri,
+                    "href": parent_asset.as_ref().map(|r| r.storage_uri.clone()),
                     "roles": ["data"],
                     "title": parent.name,
                 }
@@ -381,13 +406,13 @@ async fn render_virtual_tile(
 
     match service.service_kind {
         VirtualServiceKind::Output => {
-            let output = state
+            let output_ref = state
                 .catalog
-                .get_service(service.service_id)
+                .default_service_ref(service.service_id)
                 .await
                 .map_err(catalog_err)?;
             let request = mantle_arrow::TileRequest {
-                service_id: output.id,
+                service_id: output_ref.id,
                 z,
                 x,
                 y,
@@ -396,7 +421,7 @@ async fn render_virtual_tile(
             };
             let bytes = state
                 .raster
-                .render_tile(&[output.to_service_ref()], &request, format)
+                .render_tile(&[output_ref], &request, format)
                 .await
                 .map_err(|e| {
                     warn!(error = %e, z, x, y, "tile render failed");
@@ -408,9 +433,9 @@ async fn render_virtual_tile(
     }
 
     let parent_id = service.parent_service_id.unwrap_or(service.service_id);
-    let parent = state
+    let parent_ref = state
         .catalog
-        .get_service(parent_id)
+        .default_service_ref(parent_id)
         .await
         .map_err(catalog_err)?;
 
@@ -439,7 +464,7 @@ async fn render_virtual_tile(
     let band_map = band_indices_for_function(&service.function_id, &effective_params);
     let indices: Vec<u32> = band_map.values().copied().collect();
     let request = mantle_arrow::TileRequest {
-        service_id: parent.id,
+        service_id: parent_ref.id,
         z,
         x,
         y,
@@ -449,7 +474,7 @@ async fn render_virtual_tile(
 
     let layers = state
         .raster
-        .read_tile_bands(&parent.to_service_ref(), &request, &indices)
+        .read_tile_bands(&parent_ref, &request, &indices)
         .await
         .map_err(|e| {
             warn!(error = %e, z, x, y, "band read failed");
@@ -490,6 +515,78 @@ async fn render_virtual_tile(
         warn!(error = %e, "tile encode failed");
         ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "encode failed")
     })?;
+
+    Ok(tile_response(bytes, format))
+}
+
+/// `GET /services/{id}/scenes/{scene_id}/composite/{z}/{x}/{y}?bands=...` —
+/// composite a scene's single-band assets into an RGB tile directly, no
+/// vRPM attach required. `id` isn't otherwise used (the scene id alone is
+/// enough to resolve it) but keeps the URL self-describing.
+async fn get_composite_tile(
+    State(state): State<AppState>,
+    Path((_service_id, scene_id, z, x, y)): Path<(Uuid, Uuid, u32, u32, u32)>,
+    Query(params): Query<CompositeTileQuery>,
+) -> Result<Response, ApiError> {
+    let scene = state.catalog.get_scene(scene_id).await.map_err(catalog_err)?;
+    let format = TileFormat::from_query(params.format.as_deref());
+
+    let roles: Vec<&str> = params
+        .bands
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if roles.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bands query param must list at least one band role",
+        ));
+    }
+
+    const CHANNEL_NAMES: [&str; 3] = ["r", "g", "b"];
+    let mut assets = Vec::with_capacity(roles.len());
+    for (i, role) in roles.iter().enumerate() {
+        let asset = scene
+            .assets
+            .iter()
+            .find(|a| a.band_role == *role)
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    format!("scene has no asset with band_role '{role}'"),
+                )
+            })?;
+        let channel = CHANNEL_NAMES.get(i).copied().unwrap_or("r").to_string();
+        assets.push((
+            channel,
+            mantle_arrow::ServiceRef {
+                id: asset.id,
+                name: scene.scene.label.clone().unwrap_or_default(),
+                format: asset.format,
+                storage_uri: asset.storage_uri.clone(),
+                crs: asset.crs.clone(),
+                geometry_wkt: scene.geometry_wkt.clone(),
+            },
+        ));
+    }
+
+    let request = mantle_arrow::TileRequest {
+        service_id: scene.scene.service_id,
+        z,
+        x,
+        y,
+        band: None,
+        render_rule: None,
+    };
+    let bytes = state
+        .raster
+        .render_composite_tile(&assets, &request, format)
+        .await
+        .map_err(|e| {
+            warn!(error = %e, z, x, y, "composite tile render failed");
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "composite tile render failed")
+        })?;
 
     Ok(tile_response(bytes, format))
 }

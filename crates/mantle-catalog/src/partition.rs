@@ -1,26 +1,26 @@
 //! Partition key strategy for DuckLake footprint Parquet files.
 //!
 //! Footprints are partitioned by **acquisition month** (`YYYY-MM`) derived from the
-//! service's `temporal_start` timestamp. When `temporal_start` is absent, the current
+//! scene's `acquired_at` timestamp. When `acquired_at` is absent, the current
 //! UTC month is used. Each insert creates a new Parquet object under
 //! `{ducklake_data_path}partitions/{partition_key}/` — never rewriting existing
 //! partition directories (append-only).
 
 use chrono::{DateTime, Datelike, Utc};
 
-/// Derive the DuckLake partition key from a service acquisition timestamp.
-pub fn acquisition_month(temporal_start: Option<DateTime<Utc>>) -> String {
-    let dt = temporal_start.unwrap_or_else(Utc::now);
+/// Derive the DuckLake partition key from a scene acquisition timestamp.
+pub fn acquisition_month(acquired_at: Option<DateTime<Utc>>) -> String {
+    let dt = acquired_at.unwrap_or_else(Utc::now);
     format!("{:04}-{:02}", dt.year(), dt.month())
 }
 
-/// Resolve the partition key for a footprint insert, preferring an explicit key.
+/// Resolve the partition key for a scene insert, preferring an explicit key.
 pub fn resolve_partition_key(
     explicit: &str,
-    temporal_start: Option<DateTime<Utc>>,
+    acquired_at: Option<DateTime<Utc>>,
 ) -> String {
     if explicit.is_empty() {
-        acquisition_month(temporal_start)
+        acquisition_month(acquired_at)
     } else {
         explicit.to_string()
     }

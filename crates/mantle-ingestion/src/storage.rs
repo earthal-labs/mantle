@@ -72,9 +72,15 @@ pub async fn delete_by_storage_uri(
     }
 }
 
-pub fn service_object_key(service_id: uuid::Uuid, filename: &str) -> String {
-    let safe_name = sanitize_filename(filename);
-    format!("services/{service_id}/{safe_name}")
+/// Object key for one band asset within a scene.
+pub fn scene_asset_object_key(
+    service_id: uuid::Uuid,
+    scene_id: uuid::Uuid,
+    band_role: &str,
+    filename: &str,
+) -> String {
+    let safe_name = sanitize_filename(&format!("{band_role}_{filename}"));
+    format!("services/{service_id}/scenes/{scene_id}/{safe_name}")
 }
 
 pub fn storage_uri(bucket: &str, key: &str) -> String {
@@ -155,11 +161,12 @@ mod tests {
     }
 
     #[test]
-    fn service_key_includes_uuid() {
-        let id = uuid::Uuid::nil();
+    fn scene_asset_key_includes_service_and_scene_uuid() {
+        let service_id = uuid::Uuid::nil();
+        let scene_id = uuid::Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
         assert_eq!(
-            service_object_key(id, "scene.tif"),
-            "services/00000000-0000-0000-0000-000000000000/scene.tif"
+            scene_asset_object_key(service_id, scene_id, "red", "B4.tif"),
+            "services/00000000-0000-0000-0000-000000000000/scenes/11111111-1111-1111-1111-111111111111/red_B4.tif"
         );
     }
 }

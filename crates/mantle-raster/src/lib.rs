@@ -11,7 +11,7 @@ mod storage;
 mod tile_math;
 
 pub use encode::{encode_empty_tile, encode_tile};
-pub use colormap::{colormap_from_lut_id, apply_colormap, normalize_band, parse_colormap, Colormap, PseudocolorRamp};
+pub use colormap::{colormap_from_lut_id, apply_colormap, compose_rgb, normalize_band, parse_colormap, Colormap, PseudocolorRamp};
 pub use mosaic::{mosaic_by_reducer, mosaic_first_valid, mosaic_mean, TileLayer};
 pub use engine::{OxigdalRasterEngine, StubRasterEngine};
 pub use tile_math::{tile_bounds_web_mercator, TileBounds, TILE_SIZE};
@@ -96,6 +96,16 @@ pub trait RasterEngine: Send + Sync {
         request: &TileRequest,
         band_indices: &[u32],
     ) -> Result<Vec<TileLayer>, RasterError>;
+
+    /// Composite named single-band assets (e.g. `[("r", B4), ("g", B3), ("b",
+    /// B2)]`) into one RGBA tile — no vRPM round-trip, pure band-stacking.
+    /// Backs the multi-asset scene "View in Map" composite viewer.
+    async fn render_composite_tile(
+        &self,
+        assets: &[(String, ServiceRef)],
+        request: &TileRequest,
+        format: TileFormat,
+    ) -> Result<Vec<u8>, RasterError>;
 
     /// Report what the raster engine actually detects for a service
     /// (CRS, geotransform, dimensions, tiling) without rendering a tile.

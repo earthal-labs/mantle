@@ -16,6 +16,21 @@ CREATE INDEX IF NOT EXISTS service_deletions_purge_pending_idx
     ON service_deletions (deleted_at)
     WHERE purged_at IS NULL;
 
+-- Same tombstone pattern, one level down: a scene can be deleted without
+-- touching the rest of its service. No FK to scenes(id) — same reasoning as
+-- service_deletions below: the tombstone must outlive the row it refers to
+-- once purged, and a foreign key would make that impossible.
+CREATE TABLE IF NOT EXISTS scene_deletions (
+    scene_id    UUID PRIMARY KEY,
+    deleted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reason      TEXT,
+    purged_at   TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS scene_deletions_purge_pending_idx
+    ON scene_deletions (deleted_at)
+    WHERE purged_at IS NULL;
+
 -- virtual_services has no append-only trigger, so a real column + UPDATE works.
 ALTER TABLE virtual_services ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 

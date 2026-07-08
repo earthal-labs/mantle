@@ -1,6 +1,6 @@
 use crate::error::CatalogError;
 use crate::partition;
-use crate::{FootprintRecord, ServiceRecord};
+use crate::{AssetRecord, FootprintRecord, SceneRecord};
 use duckdb::Connection;
 use mantle_config::CatalogConfig;
 use std::path::Path;
@@ -87,16 +87,15 @@ impl DuckLakeSession {
         let ddl = format!(
             r#"
             CREATE TABLE IF NOT EXISTS {CATALOG_ALIAS}.{FOOTPRINTS_TABLE} (
+                scene_id UUID,
                 service_id UUID,
-                name VARCHAR,
-                format VARCHAR,
-                storage_uri VARCHAR,
-                crs VARCHAR,
+                service_name VARCHAR,
                 {geom_col} GEOMETRY,
                 cloud_cover DOUBLE,
                 partition_key VARCHAR,
                 temporal_start TIMESTAMPTZ,
                 temporal_end TIMESTAMPTZ,
+                assets_json VARCHAR,
                 inserted_at TIMESTAMPTZ
             );
             "#
@@ -105,9 +104,11 @@ impl DuckLakeSession {
         Ok(())
     }
 
-    pub fn append_footprint_parquet(
+    pub fn append_scene_footprint_parquet(
         &self,
-        service: &ServiceRecord,
+        service_name: &str,
+        scene: &SceneRecord,
+        assets: &[AssetRecord],
         footprint: &FootprintRecord,
         partition_key: &str,
     ) -> Result<String, CatalogError> {
@@ -117,15 +118,28 @@ impl DuckLakeSession {
         let parquet_uri = format!("{data_path}{parquet_rel}");
         let geom_col = self.config.geometry_column.clone();
 
+        let assets_json = serde_json::to_string(
+            &assets
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "id": a.id,
+                        "band_role": a.band_role,
+                        "band_index": a.band_index,
+                        "format": crate::postgres::format_to_db(a.format),
+                        "storage_uri": a.storage_uri,
+                        "crs": a.crs,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|e| CatalogError::Config(format!("serialize assets_json: {e}")))?;
+
         self.with_conn(|conn| {
             conn.execute_batch("BEGIN TRANSACTION;")?;
 
-            let temporal_start = service
-                .temporal_start
-                .map(|t| t.to_rfc3339())
-                .unwrap_or_default();
-            let temporal_end = service
-                .temporal_end
+            let acquired_at = scene
+                .acquired_at
                 .map(|t| t.to_rfc3339())
                 .unwrap_or_default();
 
@@ -133,16 +147,15 @@ impl DuckLakeSession {
                 r#"
                 CREATE OR REPLACE TEMP TABLE mantle_footprint_stage AS
                 SELECT
+                    ?::UUID AS scene_id,
                     ?::UUID AS service_id,
-                    ? AS name,
-                    ? AS format,
-                    ? AS storage_uri,
-                    ?::VARCHAR AS crs,
+                    ? AS service_name,
                     ST_GeomFromText(?) AS {geom_col},
                     ?::DOUBLE AS cloud_cover,
                     ? AS partition_key,
                     NULLIF(?, '')::TIMESTAMPTZ AS temporal_start,
                     NULLIF(?, '')::TIMESTAMPTZ AS temporal_end,
+                    ? AS assets_json,
                     now() AS inserted_at;
                 "#
             );
@@ -150,16 +163,15 @@ impl DuckLakeSession {
             conn.execute(
                 &staging,
                 duckdb::params![
-                    service.id.to_string(),
-                    service.name.as_str(),
-                    crate::postgres::format_to_db(service.format),
-                    service.storage_uri.as_str(),
-                    service.crs.as_deref(),
+                    scene.id.to_string(),
+                    scene.service_id.to_string(),
+                    service_name,
                     footprint.geometry_wkt.as_str(),
                     footprint.cloud_cover,
                     partition_key,
-                    temporal_start.as_str(),
-                    temporal_end.as_str(),
+                    acquired_at.as_str(),
+                    acquired_at.as_str(),
+                    assets_json.as_str(),
                 ],
             )?;
 
@@ -196,22 +208,25 @@ impl DuckLakeSession {
     pub fn spatial_query(
         &self,
         query: &crate::SpatialQuery,
-    ) -> Result<Vec<mantle_arrow::ServiceRef>, CatalogError> {
+    ) -> Result<Vec<mantle_arrow::SceneRef>, CatalogError> {
         let geom_col = &self.config.geometry_column;
         let mut sql = format!(
             r#"
             SELECT DISTINCT
-                service_id::VARCHAR AS id,
-                name,
-                format,
-                storage_uri,
-                crs,
-                ST_AsText({geom_col}) AS geometry_wkt
+                scene_id::VARCHAR AS scene_id,
+                service_id::VARCHAR AS service_id,
+                service_name,
+                ST_AsText({geom_col}) AS geometry_wkt,
+                assets_json
             FROM {CATALOG_ALIAS}.{FOOTPRINTS_TABLE} f
             WHERE 1=1
               AND NOT EXISTS (
                   SELECT 1 FROM {APP_POSTGRES_ALIAS}.service_deletions d
                   WHERE d.service_id = f.service_id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM {APP_POSTGRES_ALIAS}.scene_deletions sd
+                  WHERE sd.scene_id = f.scene_id
               )
             "#
         );
@@ -239,23 +254,32 @@ impl DuckLakeSession {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([], |row| {
-                Ok(mantle_arrow::ServiceRef {
-                    id: Uuid::parse_str(row.get::<_, String>(0)?.as_str())
-                        .unwrap_or_default(),
-                    name: row.get(1)?,
-                    format: crate::postgres::format_from_db(row.get::<_, String>(2)?.as_str()),
-                    storage_uri: row.get(3)?,
-                    crs: row.get(4)?,
-                    geometry_wkt: row.get(5)?,
-                })
+                let scene_id: String = row.get(0)?;
+                let service_id: String = row.get(1)?;
+                let service_name: String = row.get(2)?;
+                let geometry_wkt: Option<String> = row.get(3)?;
+                let assets_json: String = row.get(4)?;
+                Ok((scene_id, service_id, service_name, geometry_wkt, assets_json))
             })?;
 
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(CatalogError::from)
+            let mut scenes = Vec::new();
+            for row in rows {
+                let (scene_id, service_id, service_name, geometry_wkt, assets_json) = row?;
+                let assets: Vec<AssetRow> = serde_json::from_str(&assets_json)
+                    .map_err(CatalogError::from)?;
+                scenes.push(mantle_arrow::SceneRef {
+                    scene_id: Uuid::parse_str(&scene_id).unwrap_or_default(),
+                    service_id: Uuid::parse_str(&service_id).unwrap_or_default(),
+                    service_name,
+                    geometry_wkt,
+                    assets: assets.into_iter().map(AssetRow::into_asset_ref).collect(),
+                });
+            }
+            Ok(scenes)
         })
     }
 
-    /// Physically remove a service's footprint row from the DuckLake-backed
+    /// Physically remove a scene's footprint row from the DuckLake-backed
     /// table and reclaim its Parquet file. A real `DELETE` here supersedes the
     /// row's current snapshot; expiring snapshots + cleaning up old files then
     /// makes the now-orphaned file eligible for physical removal. This is
@@ -268,7 +292,27 @@ impl DuckLakeSession {
     /// silently fail to reclaim storage even though it reports success. The
     /// delete from the logical table (and hence from search/read results)
     /// still takes effect regardless.
-    pub fn purge_service(&self, service_id: Uuid) -> Result<(), CatalogError> {
+    pub fn purge_scene(&self, scene_id: Uuid) -> Result<(), CatalogError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                &format!("DELETE FROM {CATALOG_ALIAS}.{FOOTPRINTS_TABLE} WHERE scene_id = ?;"),
+                duckdb::params![scene_id.to_string()],
+            )?;
+            conn.execute_batch(&format!(
+                "CALL ducklake_expire_snapshots('{CATALOG_ALIAS}', older_than => now());"
+            ))?;
+            if let Err(err) = conn.execute_batch(&format!(
+                "CALL ducklake_cleanup_old_files('{CATALOG_ALIAS}', cleanup_all => true);"
+            )) {
+                warn!("ducklake_cleanup_old_files failed for scene {scene_id}: {err}");
+            }
+            Ok(())
+        })
+    }
+
+    /// Purge every scene belonging to a service (used when the whole service
+    /// is purged, not just one scene).
+    pub fn purge_service_scenes(&self, service_id: Uuid) -> Result<(), CatalogError> {
         self.with_conn(|conn| {
             conn.execute(
                 &format!("DELETE FROM {CATALOG_ALIAS}.{FOOTPRINTS_TABLE} WHERE service_id = ?;"),
@@ -284,6 +328,32 @@ impl DuckLakeSession {
             }
             Ok(())
         })
+    }
+}
+
+/// Deserialization shape for the DuckLake footprints table's inline
+/// `assets_json` column — mirrors `mantle_arrow::AssetRef` but with a plain
+/// `Uuid`/string format field for straightforward `serde_json` round-tripping.
+#[derive(serde::Deserialize)]
+struct AssetRow {
+    id: Uuid,
+    band_role: String,
+    band_index: u32,
+    format: String,
+    storage_uri: String,
+    crs: Option<String>,
+}
+
+impl AssetRow {
+    fn into_asset_ref(self) -> mantle_arrow::AssetRef {
+        mantle_arrow::AssetRef {
+            id: self.id,
+            band_role: self.band_role,
+            band_index: self.band_index,
+            format: crate::postgres::format_from_db(&self.format),
+            storage_uri: self.storage_uri,
+            crs: self.crs,
+        }
     }
 }
 
@@ -391,11 +461,8 @@ fn normalize_data_path(path: &str) -> String {
     }
 }
 
-pub(crate) fn resolve_partition_key(
-    footprint: &FootprintRecord,
-    service: &ServiceRecord,
-) -> String {
-    partition::resolve_partition_key(&footprint.partition_key, service.temporal_start)
+pub(crate) fn resolve_partition_key(footprint: &FootprintRecord, scene: &SceneRecord) -> String {
+    partition::resolve_partition_key(&footprint.partition_key, scene.acquired_at)
 }
 
 #[cfg(test)]

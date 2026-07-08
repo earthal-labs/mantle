@@ -423,30 +423,31 @@ async fn resolve_tile_services(
     request: &TileRequest,
 ) -> Result<Vec<ServiceRef>, StatusCode> {
     if let Some(id) = explicit_service_id {
-        let record = catalog
-            .get_service(id)
+        let service_ref = catalog
+            .default_service_ref(id)
             .await
             .map_err(catalog_to_status)?;
-        return Ok(vec![record.to_service_ref()]);
+        return Ok(vec![service_ref]);
     }
 
     if let Ok(id) = Uuid::parse_str(collection_id) {
-        let record = catalog
-            .get_service(id)
+        let service_ref = catalog
+            .default_service_ref(id)
             .await
             .map_err(catalog_to_status)?;
-        return Ok(vec![record.to_service_ref()]);
+        return Ok(vec![service_ref]);
     }
 
     if collection_id == DEFAULT_COLLECTION_ID {
         let bounds = tile_bounds_web_mercator(request.z, request.x, request.y);
-        return catalog
+        let scenes = catalog
             .spatial_query(SpatialQuery {
                 bbox: Some(bounds.to_rect()),
                 ..Default::default()
             })
             .await
-            .map_err(catalog_to_status);
+            .map_err(catalog_to_status)?;
+        return Ok(scenes.iter().filter_map(|s| s.primary_service_ref()).collect());
     }
 
     Err(StatusCode::NOT_FOUND)
@@ -465,21 +466,22 @@ async fn resolve_edr_services(
     );
 
     if let Ok(id) = Uuid::parse_str(collection_id) {
-        let record = catalog
-            .get_service(id)
+        let service_ref = catalog
+            .default_service_ref(id)
             .await
             .map_err(catalog_to_status)?;
-        return Ok(vec![record.to_service_ref()]);
+        return Ok(vec![service_ref]);
     }
 
     if collection_id == DEFAULT_COLLECTION_ID {
-        return catalog
+        let scenes = catalog
             .spatial_query(SpatialQuery {
                 bbox: Some(bbox),
                 ..Default::default()
             })
             .await
-            .map_err(catalog_to_status);
+            .map_err(catalog_to_status)?;
+        return Ok(scenes.iter().filter_map(|s| s.primary_service_ref()).collect());
     }
 
     Err(StatusCode::NOT_FOUND)
@@ -491,8 +493,7 @@ async fn resolve_process_services(
 ) -> Result<Vec<ServiceRef>, CatalogError> {
     let mut refs = Vec::with_capacity(service_ids.len());
     for id in service_ids {
-        let record = catalog.get_service(*id).await?;
-        refs.push(record.to_service_ref());
+        refs.push(catalog.default_service_ref(*id).await?);
     }
     Ok(refs)
 }
