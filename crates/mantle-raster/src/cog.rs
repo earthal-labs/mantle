@@ -76,25 +76,50 @@ pub async fn debug_metadata(
 /// (GeoTIFF code 32767) projected CRS. Some producers — notably USGS Landsat
 /// Collection 2 ARD/CONUS products — encode their projection directly via
 /// GeoTIFF `Proj*` GeoKeys instead of referencing a registered EPSG code.
-/// `epsg_code()` silently falls back to the *geographic* datum key in that
-/// case (e.g. reporting 4326 — the datum, not the actual projected CRS),
-/// which produces an identity no-op transform and garbage output. Rather
-/// than special-case one known dataset, this reconstructs a PROJ4 string
-/// directly from the file's own raw projection parameters, covering the
-/// GeoTIFF `ProjCoordTrans` methods common to satellite imagery products —
-/// so it works for any file using this pattern, not just Landsat.
+/// `GeoKeyDirectory::epsg_code()` (oxigdal-geotiff's own convenience method)
+/// silently falls back to the *geographic* datum key whenever
+/// `ProjectedCsType` isn't a real registered code — including when the key
+/// is simply absent, not just when it's explicitly the GeoTIFF
+/// "user-defined" sentinel (32767). That fallback reports e.g. 4326 (the
+/// datum, not the actual projected CRS), which produces an identity no-op
+/// transform and garbage output. So this does **not** delegate to
+/// `epsg_code()` — it inspects `ProjectedCsType`/`ProjCoordTrans` itself and
+/// only trusts a plain EPSG reference when there's no raw projection
+/// definition to prefer instead. Rather than special-case one known
+/// dataset, the reconstruction covers the GeoTIFF `ProjCoordTrans` methods
+/// common to satellite imagery products, so it works for any file using
+/// this pattern, not just Landsat.
 fn resolve_source_crs(geo_keys: &GeoKeyDirectory) -> Option<String> {
-    // Plain EPSG reference — the common, fast case.
-    if let Some(epsg) = geo_keys.epsg_code() {
-        return Some(format!("EPSG:{epsg}"));
+    let projected_cs = geo_keys.get_short(GeoKey::ProjectedCsType);
+
+    // A real, registered projected CRS reference — the common, fast case.
+    if let Some(code) = projected_cs.filter(|&v| v != 0 && v != 32767) {
+        return Some(format!("EPSG:{code}"));
     }
 
-    // Anything other than an explicit "user-defined" projected CRS marker
-    // isn't something we know how to reconstruct (e.g. a geographic-only
-    // file with no projection at all).
-    if geo_keys.get_short(GeoKey::ProjectedCsType) != Some(32767) {
-        return None;
+    // Either explicitly "user-defined" (32767) or `ProjectedCsType` is
+    // simply absent but `ProjCoordTrans` is present anyway (some encoders
+    // write raw Proj* parameters without ever setting `ProjectedCsType`) —
+    // in both cases, reconstruct a PROJ4 definition from the raw parameters
+    // rather than falling through to the geographic datum code, which is
+    // not the same CRS as the actual projected raster data.
+    if geo_keys.get_short(GeoKey::ProjCoordTrans).is_some() {
+        if let Some(crs) = reconstruct_user_defined_crs(geo_keys) {
+            return Some(crs);
+        }
     }
+
+    // Genuinely geographic (lat/lon) data — no projection at all.
+    geo_keys
+        .get_short(GeoKey::GeographicType)
+        .filter(|&v| v != 32767)
+        .map(|code| format!("EPSG:{code}"))
+}
+
+/// Builds a PROJ4 string directly from a file's raw `Proj*` GeoKeys. Only
+/// called once `resolve_source_crs` has confirmed a `ProjCoordTrans` key is
+/// present (i.e. the file defines its own projection method + parameters).
+fn reconstruct_user_defined_crs(geo_keys: &GeoKeyDirectory) -> Option<String> {
     let coord_trans = geo_keys.get_short(GeoKey::ProjCoordTrans)?;
 
     let lat1 = geo_keys.get_double(GeoKey::ProjStdParallel1);
@@ -875,5 +900,60 @@ mod tests {
             ascii_params: String::new(),
         };
         assert!(resolve_source_crs(&geo_keys).is_none());
+    }
+
+    /// Reproduces the real-world failure this whole mechanism exists for:
+    /// a file with no `ProjectedCsType` key at all (not even the explicit
+    /// 32767 "user-defined" sentinel), only `GeographicType=4326` plus a
+    /// full raw Albers `ProjCoordTrans` definition. `epsg_code()`'s own
+    /// fallback logic would happily report 4326 here since `ProjectedCsType`
+    /// is simply missing, not "user-defined" — `resolve_source_crs` must not
+    /// delegate to it, or it silently wins over the real projection data.
+    fn albers_geo_keys_with_geographic_type_but_no_projected_cs_type() -> GeoKeyDirectory {
+        use oxigdal::geotiff::geokeys::GeoKeyEntry;
+
+        let mut geo_keys = albers_user_defined_geo_keys();
+        geo_keys.entries.retain(|e| e.key_id != GeoKey::ProjectedCsType as u16);
+        geo_keys.entries.push(GeoKeyEntry {
+            key_id: GeoKey::GeographicType as u16,
+            tiff_tag_location: 0,
+            count: 1,
+            value_offset: 4326,
+        });
+        geo_keys
+    }
+
+    #[test]
+    fn resolve_source_crs_prefers_raw_albers_params_over_geographic_type_fallback() {
+        let geo_keys = albers_geo_keys_with_geographic_type_but_no_projected_cs_type();
+        let crs = resolve_source_crs(&geo_keys).expect("must derive a PROJ4 string");
+        assert!(
+            crs.starts_with("+proj=aea"),
+            "must reconstruct the raw Albers definition, not fall back to EPSG:4326: {crs}"
+        );
+    }
+
+    #[test]
+    fn resolve_source_crs_falls_back_to_geographic_type_when_no_proj_coord_trans() {
+        use oxigdal::geotiff::geokeys::GeoKeyEntry;
+
+        // A genuinely geographic (lat/lon) file: no ProjectedCsType, no
+        // ProjCoordTrans, just a GeographicType datum reference. This must
+        // still resolve — it's the one case where trusting GeographicType
+        // is actually correct.
+        let geo_keys = GeoKeyDirectory {
+            version: 1,
+            key_revision_major: 1,
+            key_revision_minor: 0,
+            entries: vec![GeoKeyEntry {
+                key_id: GeoKey::GeographicType as u16,
+                tiff_tag_location: 0,
+                count: 1,
+                value_offset: 4326,
+            }],
+            double_params: Vec::new(),
+            ascii_params: String::new(),
+        };
+        assert_eq!(resolve_source_crs(&geo_keys), Some("EPSG:4326".to_string()));
     }
 }
